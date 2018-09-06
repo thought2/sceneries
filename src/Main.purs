@@ -1,22 +1,27 @@
 module Main where
 
-import Control.Monad.Aff (Aff, runAff)
-import Control.Monad.Eff (Eff)
+import Control.Monad.Aff (Aff, Canceler(..), runAff)
+import Control.Monad.Eff (Eff, kind Effect)
 import Control.Monad.Eff.Console (CONSOLE, log)
-import Control.Monad.Eff.Random (random)
+import Control.Monad.Eff.Random (RANDOM, random)
 import Control.Monad.Except (runExcept)
-import Data.Array (concat, concatMap, drop, filter, foldr, index, last, length, mapWithIndex, range, snoc, take, unsafeIndex, zipWith)
+import Data.Array (concat, concatMap, drop, filter, foldr, head, index, last, length, mapWithIndex, range, snoc, take, unsafeIndex, zipWith)
+import Data.Array.NonEmpty (NonEmptyArray)
+import Data.Array.NonEmpty as NE
 import Data.Bifunctor (lmap)
 import Data.Either (Either(Right, Left), either, fromRight)
 import Data.Eq ((/=))
 import Data.Foreign (F, Foreign, readArray, readInt, readNumber)
 import Data.Foreign.Index (readProp)
 import Data.HTTP.Method (Method(..))
-import Data.Int (toNumber)
-import Data.List.NonEmpty (head)
+import Data.Int (even, toNumber)
+import Data.List.NonEmpty as NEList
 import Data.Matrix (toArray) as M
 import Data.Matrix4 (identity, makePerspective, translate) as M
-import Data.Maybe (Maybe(Just), fromJust, maybe, maybe')
+import Data.Maybe (Maybe(..), fromJust, maybe, maybe')
+import Data.Midi (Event(..), TimedEvent(..))
+import Data.Midi.Parser (parseMidiEvent)
+import Data.Midi.WebMidi (createEventChannel, listen)
 import Data.Monoid (mempty)
 import Data.String (Pattern(..), split)
 import Data.String.NonEmpty (unsafeFromString)
@@ -38,7 +43,10 @@ import Partial (crash)
 import Partial.Unsafe (unsafePartial)
 import Pathy (class IsDirOrFile, class IsRelOrAbs, AbsDir, AbsFile, Name(..), RelFile, SandboxedPath, dir, extension, file, fileName, name, parseRelFile, posixParser, posixPrinter, printPath, rootDir, sandboxAny, (</>))
 import Prelude (Unit, bind, const, discard, flip, id, map, max, negate, pure, show, sub, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>), (>>=), (>>>))
-import System.Clock (milliseconds)
+import Signal (Signal, filterMap, foldp, merge, runSignal, (~>))
+import Signal.Channel (CHANNEL, subscribe)
+import Signal.Time (every, millisecond, second)
+import System.Clock (CLOCK, milliseconds)
 import Text.Parsing.Parser (Parser, runParser)
 import Type.Prelude (False)
 import URI (Path(..), URI(..))
@@ -83,40 +91,58 @@ shaders = Shaders fragmentShader vertexShader
 
 runAff' aff errCb okCb = runAff errCb okCb aff
 
---main :: forall eff . State -> Bindings -> Eff (webgl :: WebGl, console :: CONSOLE | eff) Unit
+-- main :: forall a.
+--   Eff
+--     ( ajax :: AJAX
+--     , console :: CONSOLE
+--     , clock :: CLOCK
+--     , random :: RANDOM
+--     | a
+--     )
+--     (Canceler
+--        ( ajax :: AJAX
+--        , console :: CONSOLE
+--        , clock :: CLOCK
+--        , random :: RANDOM
+--        | a
+--        )
+--     )
 main = do
   runAff' getScenes (log <<< show) $ \scenes ->
     let triangles = concatMap (\(Scene s) -> s) scenes in
     runWebGL "glcanvas" log \context -> do
       withShaders shaders log \bindings -> do
-
         config <- mkConfig scenes context
 
         renderInit config
-        tick config initState bindings
+        mainSig config bindings
 
---tick :: forall eff . State -> Bindings -> Eff (webgl :: WebGl | eff) Unit
-tick (config @ Config { size }) state bindings = do
-  t <- milliseconds
-  let state' = update state t
-  render config state' bindings t
-  requestAnimationFrame (tick config state' bindings)
+handleMidi :: TimedEvent -> Maybe Number
+handleMidi (TimedEvent { event }) =
+  case event of
+    Just (ControlChange _ 14 n) -> Just $ reMap (vec2 0.0 127.0) spacePos (toNumber n)
+    _ -> Nothing
+
+mainSig :: forall a b. Config -> Bindings a ->
+           Eff ( channel :: CHANNEL
+               , console :: CONSOLE
+               , webgl :: WebGl
+               | b
+               )
+               Unit
+mainSig config bindings = do
+  chan <- createEventChannel
+  let inputs = subscribe chan # filterMap handleMidi 0.0 # map SigInputs
+      ticks = every millisecond # map SigTicks
+      states = merge ticks inputs
+        # foldp update initState
+
+  runSignal (states ~> (\state -> render config state bindings))
 
 --------------------------------------------------------------------------------
 -- CONFIG
 --------------------------------------------------------------------------------
 
--- mkConfig :: Array Triangle -> WebGLContext -> Eff _ Config
--- mkConfig triangles context = do
-  -- size <- vec2 <$> getCanvasWidth context <*> getCanvasHeight context
-
---   movingTriangles <-
---     triangles
---       # mapM (\t -> Tuple <$> flatTriangle t <*> pure t)
-
---   pure (Config { size, movingTriangles, randomField : unsafePartial crash, scenes : unsafePartial crash }) -- @TODO
-
---mkConfig' :: Array Scene -> WebGLContext -> Eff _ Config
 mkConfig scenes context = do
   randomField <- range 0 n # mapM (const randVec)
   size <- vec2 <$> getCanvasWidth context <*> getCanvasHeight context
@@ -132,7 +158,6 @@ mkConfig scenes context = do
       randomVec2n
         <#> map (reMap spacePos spaceNegPos)
         >>> (\v2 -> vec2to3 v2 18.0)
-
 
 randomVec2n :: Eff _ Vec2n
 randomVec2n =
@@ -162,15 +187,13 @@ vec2to3 vec z =
 -- MORPH CHAIN
 --------------------------------------------------------------------------------
 
-combineTimeFunctions
-  :: forall a
-   . Array { duration :: Number, f :: Number -> a } -> Number -> Maybe a
-combineTimeFunctions xs time =
+combineTimeFunctions :: forall a . Script a -> Number -> Maybe a
+combineTimeFunctions (Script xs) time =
   filter (\{ absDuration } -> absDuration > time) fnLookup
     # last
     # map (\{ absDuration, duration, f } -> f (time - (absDuration - duration)))
   where
-    fnLookup = mapAccumR combine 0.0 xs # \r -> r.value
+    fnLookup = mapAccumR combine 0.0 xs # _.value
     combine absDuration { duration, f } =
       let absDuration' = absDuration + duration in
       { accum : absDuration'
@@ -186,10 +209,13 @@ morph' x y t = morph t x y
 
 initState :: State
 initState =
-  State {}
+  State { pct : 0.0, time : 0.0 }
 
-update :: State -> Number -> State
-update s t = s
+update :: Sig -> State -> State
+update sig (State st) =
+  case sig of
+    SigTicks t -> State $ st { time = t }
+    SigInputs pct -> State $ st { pct = pct }
 
 --------------------------------------------------------------------------------
 -- SHORTHANDS
@@ -217,6 +243,26 @@ spacePos :: Vec Two Number
 spacePos = vec2 zero onePos
 
 --------------------------------------------------------------------------------
+-- SELECTORS
+--------------------------------------------------------------------------------
+
+selectScript :: Config -> State -> Script (Array Triangle)
+selectScript (Config { randomField, scenes }) state =
+  head scenes
+    # map (snoc scenes)
+    # maybe [] id
+    # mapWithIndex f
+    # Script
+  where
+    f i (Scene triangles) =
+      let modFn = if even i then id else flip in
+      { duration : 1.0 / toNumber nScenes
+      , f : (modFn morph') triangles randomTriangles
+      }
+    randomTriangles = map (\v -> Triangle v v v) randomField
+    nScenes = length scenes
+
+--------------------------------------------------------------------------------
 -- RENDER
 --------------------------------------------------------------------------------
 
@@ -228,8 +274,8 @@ type Bindings a  = { aVertexPosition :: Attribute Gl.Vec3
                   }
 
 render :: forall eff a
-        . Config -> State -> Bindings a -> Number -> Eff ( webgl :: WebGl, console :: CONSOLE | eff) Unit
-render (Config { size, movingTriangles, scenes, randomField }) (State {}) bindings time =
+        . Config -> State -> Bindings a -> Eff ( webgl :: WebGl, console :: CONSOLE | eff) Unit
+render config@(Config { size, movingTriangles, scenes, randomField }) state@(State { pct, time }) bindings =
   do
     clear [ COLOR_BUFFER_BIT, DEPTH_BUFFER_BIT ]
     setUniformFloats bindings.uPMatrix (M.toArray pMatrix)
@@ -245,20 +291,12 @@ render (Config { size, movingTriangles, scenes, randomField }) (State {}) bindin
           # mapWithPct (\pct' (Tuple t1 t2) -> morph (getPct pct') t1 t2)
           # concatMap (\(Triangle p1 p2 p3) -> concatMap toArray [ p1, p2, p3 ])
 
-      script =
-        map f scenes
-        where
-          f (Scene triangles) =
-            { duration : 1.0 / toNumber nScenes
-            , f : morph' triangles (take (length triangles) randomTriangles)
-            }
-          randomTriangles = map (\v -> Triangle v v v) randomField
-          nScenes = length scenes
+      script = selectScript config state
 
       t = sin (time / loopTime * two * pi) # reMap spaceNegPos spacePos
 
       xs' =
-        combineTimeFunctions script t
+        combineTimeFunctions script pct
           # maybe [] id
           # concatMap (\(Triangle p1 p2 p3) -> concatMap toArray [ p1, p2, p3 ])
 
@@ -274,7 +312,7 @@ render (Config { size, movingTriangles, scenes, randomField }) (State {}) bindin
         M.translate (vec3 zero 0.0 (-20.0)) M.identity
 
       pMatrix =
-          M.makePerspective 45.0 (toNumber width / toNumber height) 0.1 100.0
+        M.makePerspective 45.0 (toNumber width / toNumber height) 0.1 100.0
 
 
 mapWithPct :: forall a b . (Number -> a -> b) -> Array a -> Array b
@@ -350,7 +388,7 @@ getIndex folder =
     path = folder </> indexFile
     indexFile = file (SProxy :: SProxy "index.txt")
 
-printPath' :: forall t60 t61. IsRelOrAbs t61 => IsDirOrFile t60 => SandboxedPath t61 t60 -> String
+printPath' :: forall a b. IsRelOrAbs a => IsDirOrFile b => SandboxedPath a b -> String
 printPath' path = printPath posixPrinter path
 
 parseIndexFile :: String -> Either String (Array RelFile)
@@ -366,7 +404,7 @@ getScene :: forall e . AbsFile -> Aff (ajax:: AJAX | e) Scene
 getScene path = do
   { response } <- get (printPath' (sandboxAny path))
   case readWFObj response # parse # runExcept of
-    Left err -> fail (show (head err))
+    Left err -> fail (show (NEList.head err))
     Right xs -> pure $ Scene xs
 
 parse :: Foreign -> F (Array Triangle)
@@ -420,7 +458,7 @@ section stride offset xs =
   go [] xs
   where
     go acc xs =
-      let ys = take 3 xs in
+      let ys = take stride xs in
       if length ys == stride then
         go (snoc acc ys) (drop offset xs)
       else
@@ -450,7 +488,8 @@ type Vec2n = Vec2 Number
 type Vec2i = Vec2 Int
 
 newtype State = State
-  {
+  { pct :: Number
+  , time :: Number
   }
 
 type Pair a = Vec2 a
@@ -463,3 +502,7 @@ newtype Config = Config
   }
 
 newtype Scene = Scene (Array Triangle)
+
+newtype Script a = Script (Array { duration :: Number, f :: Number -> a })
+
+data Sig = SigTicks Number | SigInputs Number
