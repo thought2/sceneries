@@ -1,37 +1,48 @@
 module Main where
 
-import Control.Alternative ((<*>))
-import Control.Monad.Aff (Aff, launchAff, makeAff, runAff)
-import Control.Monad.Aff.Class (liftAff)
-import Control.Monad.Cont.Trans (lift)
+import Control.Monad.Aff (Aff, runAff)
 import Control.Monad.Eff (Eff)
-import Control.Monad.Eff.Class (liftEff)
 import Control.Monad.Eff.Console (CONSOLE, log)
-import Control.Monad.Eff.Exception (Error)
+import Control.Monad.Eff.Random (random)
 import Control.Monad.Except (runExcept)
-import Data.Array (concat, concatMap, drop, fold, foldM, foldl, foldr, index, length, reverse, snoc, take)
-import Data.Either (Either(..), either)
-import Data.Foreign (F, Foreign, ForeignError(..), readArray, readInt, readNumber, readString)
-import Data.Foreign.Index (readIndex, readProp)
+import Data.Array (concat, concatMap, drop, filter, foldr, index, last, length, mapWithIndex, range, snoc, take, unsafeIndex, zipWith)
+import Data.Bifunctor (lmap)
+import Data.Either (Either(Right, Left), either, fromRight)
+import Data.Eq ((/=))
+import Data.Foreign (F, Foreign, readArray, readInt, readNumber)
+import Data.Foreign.Index (readProp)
 import Data.HTTP.Method (Method(..))
 import Data.Int (toNumber)
-import Data.Int as Int
-import Data.List.NonEmpty (NonEmptyList(..), head)
+import Data.List.NonEmpty (head)
 import Data.Matrix (toArray) as M
-import Data.Matrix4 as M
-import Data.Maybe (Maybe(..), fromMaybe, maybe, maybe')
-import Data.Number as Number
+import Data.Matrix4 (identity, makePerspective, translate) as M
+import Data.Maybe (Maybe(Just), fromJust, maybe, maybe')
+import Data.Monoid (mempty)
 import Data.String (Pattern(..), split)
-import Data.Tuple (Tuple(..))
-import Data.Vector (toArray)
-import Data.Vector3 (Vec3, get3X, get3Y, get3Z, vec3)
-import Extensions (LogLevel(..), fail, mapM)
-import Graphics.WebGLAll (Attribute, Capacity(..), Mask(..), Mat4, Mode(..), Shaders(..), Uniform, WebGLProg, WebGl, clear, clearColor, drawArr, enable, getCanvasHeight, getCanvasWidth, makeBufferFloat, runWebGL, setUniformFloats, viewport, withShaders)
+import Data.String.NonEmpty (unsafeFromString)
+import Data.Symbol (SProxy(..))
+import Data.Traversable (Accum, mapAccumR)
+import Data.Traversable.Accum (Accum)
+import Data.Tuple (Tuple(..), uncurry)
+import Data.Tuple.Nested (type (/\), (/\))
+import Data.TypeNat (Three, Two)
+import Data.Vector (Vec, toArray)
+import Data.Vector2 (Vec2, get2X, get2Y, vec2)
+import Data.Vector3 (Vec3, get3X, get3Y, vec3)
+import Extensions (fail, mapM)
+import Graphics.WebGLAll (Attribute, Capacity(..), Mask(..), Mat4, Mode(..), Shaders(..), Uniform, WebGLProg, WebGl, WebGLContext, clear, clearColor, drawArr, enable, getCanvasHeight, getCanvasWidth, makeBufferFloat, requestAnimationFrame, runWebGL, setUniformFloats, viewport, withShaders)
 import Graphics.WebGLAll as Gl
-import Network.HTTP.Affjax (AJAX, affjax, defaultRequest)
+import Math (pi, sin)
+import Network.HTTP.Affjax (AJAX, Affjax, URL, affjax, defaultRequest, get)
 import Partial (crash)
 import Partial.Unsafe (unsafePartial)
-import Prelude (Unit, bind, discard, map, negate, pure, show, (#), ($), (-), (/), (<#>), (<$>), (<<<), (<>), (=<<), (>>=), (>>>))
+import Pathy (class IsDirOrFile, class IsRelOrAbs, AbsDir, AbsFile, Name(..), RelFile, SandboxedPath, dir, extension, file, fileName, name, parseRelFile, posixParser, posixPrinter, printPath, rootDir, sandboxAny, (</>))
+import Prelude (Unit, bind, const, discard, flip, id, map, max, negate, pure, show, sub, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>), (>>=), (>>>))
+import System.Clock (milliseconds)
+import Text.Parsing.Parser (Parser, runParser)
+import Type.Prelude (False)
+import URI (Path(..), URI(..))
+import URI.Path as Path
 
 --------------------------------------------------------------------------------
 -- SHADERS
@@ -72,16 +83,138 @@ shaders = Shaders fragmentShader vertexShader
 
 runAff' aff errCb okCb = runAff errCb okCb aff
 
---main :: forall eff . Eff (console :: CONSOLE | eff) Unit
+--main :: forall eff . State -> Bindings -> Eff (webgl :: WebGl, console :: CONSOLE | eff) Unit
 main = do
-  runAff' getData (log <<< show) $ \triangles ->
+  runAff' getScenes (log <<< show) $ \scenes ->
+    let triangles = concatMap (\(Scene s) -> s) scenes in
     runWebGL "glcanvas" log \context -> do
-
-      width <- getCanvasWidth context
-      height <- getCanvasHeight context
-
       withShaders shaders log \bindings -> do
-        render width height bindings triangles
+
+        config <- mkConfig scenes context
+
+        renderInit config
+        tick config initState bindings
+
+--tick :: forall eff . State -> Bindings -> Eff (webgl :: WebGl | eff) Unit
+tick (config @ Config { size }) state bindings = do
+  t <- milliseconds
+  let state' = update state t
+  render config state' bindings t
+  requestAnimationFrame (tick config state' bindings)
+
+--------------------------------------------------------------------------------
+-- CONFIG
+--------------------------------------------------------------------------------
+
+-- mkConfig :: Array Triangle -> WebGLContext -> Eff _ Config
+-- mkConfig triangles context = do
+  -- size <- vec2 <$> getCanvasWidth context <*> getCanvasHeight context
+
+--   movingTriangles <-
+--     triangles
+--       # mapM (\t -> Tuple <$> flatTriangle t <*> pure t)
+
+--   pure (Config { size, movingTriangles, randomField : unsafePartial crash, scenes : unsafePartial crash }) -- @TODO
+
+--mkConfig' :: Array Scene -> WebGLContext -> Eff _ Config
+mkConfig scenes context = do
+  randomField <- range 0 n # mapM (const randVec)
+  size <- vec2 <$> getCanvasWidth context <*> getCanvasHeight context
+  pure $ Config
+    { randomField
+    , scenes
+    , movingTriangles : []
+    , size
+    }
+  where
+    n = map (\(Scene s) -> length s) scenes # foldr max 0
+    randVec =
+      randomVec2n
+        <#> map (reMap spacePos spaceNegPos)
+        >>> (\v2 -> vec2to3 v2 18.0)
+
+
+randomVec2n :: Eff _ Vec2n
+randomVec2n =
+  vec2 <$> random <*> random
+
+randomVec3n :: Eff _ Vec3n
+randomVec3n =
+  vec3 <$> random <*> random <*> random
+
+flatTriangle :: Triangle -> Eff _ Triangle
+flatTriangle (Triangle p1 p2 p3) = do
+  pos <- randomVec2n <#> (map (reMap spacePos spaceNegPos) >>> (\v -> vec2to3 v zero))
+  pure $ Triangle pos pos pos
+  where
+    p = (vec3 one zero zero)
+    center = p1 --@TODO
+    x = get3X center
+    y = get3Y center
+
+    flatTriangle = Triangle (vec3 0.1 0.1 zero) (vec3 zero 0.1 zero) (vec3 zero zero zero)
+
+vec2to3 :: forall a . Vec2 a -> a -> Vec3 a
+vec2to3 vec z =
+  vec3 (get2X vec) (get2Y vec) z
+
+--------------------------------------------------------------------------------
+-- MORPH CHAIN
+--------------------------------------------------------------------------------
+
+combineTimeFunctions
+  :: forall a
+   . Array { duration :: Number, f :: Number -> a } -> Number -> Maybe a
+combineTimeFunctions xs time =
+  filter (\{ absDuration } -> absDuration > time) fnLookup
+    # last
+    # map (\{ absDuration, duration, f } -> f (time - (absDuration - duration)))
+  where
+    fnLookup = mapAccumR combine 0.0 xs # \r -> r.value
+    combine absDuration { duration, f } =
+      let absDuration' = absDuration + duration in
+      { accum : absDuration'
+      , value : { absDuration : absDuration', duration, f }
+      }
+
+morph' :: forall a . Morph a => a -> a -> Number -> a
+morph' x y t = morph t x y
+
+--------------------------------------------------------------------------------
+-- UPDATE
+--------------------------------------------------------------------------------
+
+initState :: State
+initState =
+  State {}
+
+update :: State -> Number -> State
+update s t = s
+
+--------------------------------------------------------------------------------
+-- SHORTHANDS
+--------------------------------------------------------------------------------
+
+zero :: Number
+zero = 0.0
+
+onePos :: Number
+onePos = 1.0
+
+one :: Number
+one = onePos
+
+two :: Number
+two = 2.0
+
+oneNeg :: Number
+oneNeg = -1.0
+
+spaceNegPos :: Vec Two Number
+spaceNegPos = vec2 oneNeg onePos
+
+spacePos :: Vec Two Number
+spacePos = vec2 zero onePos
 
 --------------------------------------------------------------------------------
 -- RENDER
@@ -94,48 +227,147 @@ type Bindings a  = { aVertexPosition :: Attribute Gl.Vec3
                   | a
                   }
 
-
 render :: forall eff a
-        . Int -> Int -> Bindings a -> Array Triangle -> Eff ( webgl :: WebGl
-                                                            , console :: CONSOLE
-                                                            | eff
-                                                            )
-                                                            Unit
-render width height bindings triangles =
+        . Config -> State -> Bindings a -> Number -> Eff ( webgl :: WebGl, console :: CONSOLE | eff) Unit
+render (Config { size, movingTriangles, scenes, randomField }) (State {}) bindings time =
   do
-    clearColor 0.0 0.5 0.0 1.0
-    enable DEPTH_TEST
-
-    viewport 0 0 width height
-    clear [COLOR_BUFFER_BIT, DEPTH_BUFFER_BIT]
-
-    let pMatrix =
-          M.makePerspective 45.0 (toNumber width / toNumber height) 0.1 100.0
-
+    clear [ COLOR_BUFFER_BIT, DEPTH_BUFFER_BIT ]
     setUniformFloats bindings.uPMatrix (M.toArray pMatrix)
-
-    let mvMatrix = M.translate (vec3 (-1.5) 0.0 (-10.0)) M.identity
-
     setUniformFloats bindings.uMVMatrix (M.toArray mvMatrix)
 
-    let xs = triangles
-             # concatMap (\(Triangle p1 p2 p3) -> concatMap toArray [p1, p2, p3])
-
-    buf <- makeBufferFloat xs
+    buf <- makeBufferFloat xs'
 
     drawArr TRIANGLES buf bindings.aVertexPosition
+
+    where
+      xs =
+        movingTriangles
+          # mapWithPct (\pct' (Tuple t1 t2) -> morph (getPct pct') t1 t2)
+          # concatMap (\(Triangle p1 p2 p3) -> concatMap toArray [ p1, p2, p3 ])
+
+      script =
+        map f scenes
+        where
+          f (Scene triangles) =
+            { duration : 1.0 / toNumber nScenes
+            , f : morph' triangles (take (length triangles) randomTriangles)
+            }
+          randomTriangles = map (\v -> Triangle v v v) randomField
+          nScenes = length scenes
+
+      t = sin (time / loopTime * two * pi) # reMap spaceNegPos spacePos
+
+      xs' =
+        combineTimeFunctions script t
+          # maybe [] id
+          # concatMap (\(Triangle p1 p2 p3) -> concatMap toArray [ p1, p2, p3 ])
+
+      loopTime = 8000.0
+
+      getPct offsetPct =
+        sin ((time / loopTime * two * pi) + (offsetPct * loopTime))
+          # reMap spacePos spaceNegPos
+
+      Tuple width height = get2 size
+
+      mvMatrix =
+        M.translate (vec3 zero 0.0 (-20.0)) M.identity
+
+      pMatrix =
+          M.makePerspective 45.0 (toNumber width / toNumber height) 0.1 100.0
+
+
+mapWithPct :: forall a b . (Number -> a -> b) -> Array a -> Array b
+mapWithPct f xs =
+  mapWithIndex (\i x -> f (toNumber i / n) x) xs
+  where
+    n = toNumber (length xs)
+
+renderInit :: forall eff . Config -> Eff ( webgl :: WebGl | eff ) Unit
+renderInit (Config { size }) = do
+  clearColor 0.0 0.5 0.0 1.0
+  enable DEPTH_TEST
+  let (Tuple w h) = get2 size
+  viewport 0 0 w h
+
+get2 :: forall a . Vec2 a -> Tuple a a
+get2 vec = Tuple (get2X vec) (get2Y vec)
+
+reMap :: Pair Number -> Pair Number -> Number -> Number
+reMap pair1 pair2 value =
+  pivot2 + (pct * dist2)
+  where
+    pivot1 = get2X pair1
+    pivot2 = get2X pair2
+    dist1 = sub' (get2 pair1)
+    dist2 = sub' (get2 pair2)
+    sub' = uncurry (flip sub)
+    pct = (value - pivot1) / dist1
+
+--------------------------------------------------------------------------------
+-- CLASS
+--------------------------------------------------------------------------------
+
+class Morph a where
+  morph :: Number -> a -> a -> a
+
+instance morphNumber :: Morph Number where
+  morph pct x y = x + (pct * (y - x))
+
+instance morphVec3 :: Morph a => Morph (Vec Three a) where
+  morph pct x y =
+    morph pct <$> x <*> y
+
+instance morphTriangle :: Morph Triangle where
+  morph pct (Triangle x1 y1 z1) (Triangle x2 y2 z2) =
+    Triangle (f x1 x2) (f y1 y2) (f z1 z2)
+    where
+      f = morph pct
+
+instance morphArray :: Morph a => Morph (Array a) where
+  morph pct xs ys =
+    zipWith (morph pct) xs ys
 
 --------------------------------------------------------------------------------
 -- DATA
 --------------------------------------------------------------------------------
 
-getData :: forall e . Aff (ajax:: AJAX | e) (Array Triangle)
-getData = do
-  { response } <-
-    affjax $ defaultRequest { url = "/data/untitled1.obj", method = Left GET }
+getScenes :: forall e . Aff (ajax:: AJAX | e) (Array Scene)
+getScenes = do
+  paths <- getIndex indexDir <#> filter predFn
+  mapM getScene paths
+  where
+    predFn = fileName >>> extension >>> map ((==) objExt) >>> maybe false id
+    objExt = unsafePartial $ unsafeFromString "obj"
+    indexDir = rootDir </> dir (SProxy :: SProxy "data")
+
+getIndex :: forall e . AbsDir -> Aff (ajax:: AJAX | e) (Array AbsFile)
+getIndex folder =
+  get (printPath' (sandboxAny path))
+    >>= (_.response >>> parseIndexFile >>> either fail pure)
+    <#> (map ((</>) folder))
+  where
+    path = folder </> indexFile
+    indexFile = file (SProxy :: SProxy "index.txt")
+
+printPath' :: forall t60 t61. IsRelOrAbs t61 => IsDirOrFile t60 => SandboxedPath t61 t60 -> String
+printPath' path = printPath posixPrinter path
+
+parseIndexFile :: String -> Either String (Array RelFile)
+parseIndexFile str =
+  split (Pattern "\n") str
+    # filter ((/=) "")
+    # mapM (parseRelFile posixParser)
+    # maybe (Left errMsg) Right
+  where
+    errMsg = "Invalid index file"
+
+getScene :: forall e . AbsFile -> Aff (ajax:: AJAX | e) Scene
+getScene path = do
+  { response } <- get (printPath' (sandboxAny path))
   case readWFObj response # parse # runExcept of
     Left err -> fail (show (head err))
-    Right xs -> pure xs
+    Right xs -> pure $ Scene xs
 
 parse :: Foreign -> F (Array Triangle)
 parse val = do
@@ -183,14 +415,21 @@ lookup xs indices =
   let hunde = Tuple xs indices in
   mapM (index xs) indices
 
-partition3 :: forall a b . Int -> (a -> a -> a -> b) -> Array a -> Array b
-partition3 offset f xs =
+section :: forall a b . Int -> Int -> Array a -> Array (Array a)
+section stride offset xs =
   go [] xs
   where
     go acc xs =
-      case take 3 xs of
-        [x, y, z] -> go (snoc acc $ f x y z) (drop offset xs)
-        _ -> acc
+      let ys = take 3 xs in
+      if length ys == stride then
+        go (snoc acc ys) (drop offset xs)
+      else
+        acc
+
+section2 :: forall a. Int -> Array a -> Array (Tuple a a)
+section2 offset xs =
+  section 2 offset xs
+  # map (unsafePartial (\[a, b] -> a /\ b))
 
 --------------------------------------------------------------------------------
 -- FFI
@@ -207,3 +446,20 @@ data Cube = Cube { triangles :: Array Vec3n }
 data Triangle = Triangle Vec3n Vec3n Vec3n
 
 type Vec3n = Vec3 Number
+type Vec2n = Vec2 Number
+type Vec2i = Vec2 Int
+
+newtype State = State
+  {
+  }
+
+type Pair a = Vec2 a
+
+newtype Config = Config
+  { movingTriangles :: Array (Tuple Triangle Triangle) -- @TODO
+  , size :: Vec2i
+  , randomField :: Array Vec3n
+  , scenes :: Array Scene
+  }
+
+newtype Scene = Scene (Array Triangle)
