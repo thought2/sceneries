@@ -8,7 +8,7 @@ import Control.Monad.Eff.Timer (TIMER)
 import Control.Monad.Except (runExcept)
 import DOM (DOM)
 import Data.Array (concat, concatMap, drop, filter, foldr, head, index, init, last, length, mapWithIndex, range, snoc, take, unsafeIndex, zipWith)
-import Data.Array.NonEmpty (NonEmptyArray)
+import Data.Array.NonEmpty (NonEmptyArray, fromArray)
 import Data.Array.NonEmpty as NE
 import Data.Bifunctor (lmap)
 import Data.Char (fromCharCode, toCharCode)
@@ -25,7 +25,8 @@ import Data.Maybe (Maybe(..), fromJust, maybe, maybe')
 import Data.Midi (Event(..), TimedEvent(..))
 import Data.Midi.Parser (parseMidiEvent)
 import Data.Midi.WebMidi (createEventChannel, listen)
-import Data.Monoid (mempty)
+import Data.Monoid (class Monoid, mempty)
+import Data.Semigroup.Foldable (fold1)
 import Data.String (Pattern(..), split)
 import Data.String.NonEmpty (unsafeFromString)
 import Data.Symbol (SProxy(..))
@@ -45,8 +46,8 @@ import Network.HTTP.Affjax (AJAX, Affjax, URL, affjax, defaultRequest, get)
 import Partial (crash)
 import Partial.Unsafe (unsafePartial, unsafePartialBecause)
 import Pathy (class IsDirOrFile, class IsRelOrAbs, AbsDir, AbsFile, Name(..), RelFile, SandboxedPath, dir, extension, file, fileName, name, parseRelFile, posixParser, posixPrinter, printPath, rootDir, sandboxAny, (</>))
-import Prelude (Unit, bind, const, discard, flip, id, map, max, negate, pure, show, sub, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>), (>>=), (>>>))
-import Signal (Signal, constant, filterMap, foldp, merge, mergeMany, runSignal, (~>))
+import Prelude (class Semigroup, Unit, bind, const, discard, flip, id, map, max, negate, pure, show, sub, unit, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>), (>>=), (>>>))
+import Signal (Signal, constant, filterMap, foldp, map2, merge, mergeMany, runSignal, (~>))
 import Signal.Channel (CHANNEL, subscribe)
 import Signal.DOM (DimensionPair, CoordinatePair, animationFrame, keyPressed, mousePos, windowDimensions)
 import Signal.Time (Time, every, millisecond, second)
@@ -113,10 +114,9 @@ runAff' aff errCb okCb = runAff errCb okCb aff
 --     )
 main = do
   runAff' getScenes (log <<< show) $ \scenes ->
-    let triangles = concatMap (\(Scene s) -> s) scenes in
     runWebGL "glcanvas" log \context -> do
       withShaders shaders log \bindings -> do
-        config <- mkConfig scenes context
+        config <- mkConfig scenes
 
         renderInit config
         mainFrp config bindings
@@ -158,22 +158,22 @@ keyboardMouseInput :: forall eff. Eff ( dom :: DOM | eff) (Signal Input)
 keyboardMouseInput = do
   keys <- keysPressed <#> map SigKey
   mouse <- mousePos <#> map SigMouse
-  -- sizes <- windowDimensions <#> map SigSizes
+  sizes <- windowDimensions
 
   merge keys mouse
-    -- # merge sizes
     # foldp update init
     # filterMap
       (\{ lastKey : CharKey c, value } -> Input <$> pure c <*> value)
       (Input '0' 0.0)
+    # map2 (\{ w } (Input c v) -> Input c (v / toNumber w)) sizes
     # pure
 
   where
     init = { lastKey : CharKey '0', value : Nothing }
     update x m = case x /\ m of
       SigKey lastKey /\ _ -> m { lastKey = lastKey, value = Nothing }
-      SigMouse { y } /\ { lastKey : CharKey '1' } -> m { value = Just $ toNumber y }
-      SigMouse { y } /\ { lastKey : CharKey '2' } -> m { value = Just $ toNumber y }
+      SigMouse { x } /\ { lastKey : CharKey '1' } -> m { value = Just $ toNumber x }
+      SigMouse { x } /\ { lastKey : CharKey '2' } -> m { value = Just $ toNumber x }
       _ -> m
 
 midiInput :: forall eff. Eff ( channel :: CHANNEL | eff) (Signal Input)
@@ -183,7 +183,7 @@ midiInput = do
     # filterMap f (Input '0' 0.5)
     # pure
   where
-    f (TimedEvent { event : (Just (ControlChange _ _ n)) }) = Just $ Input '1' (reMap' n)
+    f (TimedEvent { event : (Just (ControlChange _ _ n)) }) = Just $ Input '2' (reMap' n)
     f _ = Nothing
     reMap' n = reMap (vec2 0.0 127.0) spacePos (toNumber n)
 
@@ -201,20 +201,11 @@ intToKey :: Int -> Key
 intToKey n = CharKey (fromCharCode n)
 
 --------------------------------------------------------------------------------
--- MIDI
---------------------------------------------------------------------------------
-
-handleMidi :: TimedEvent -> Maybe Number
-handleMidi (TimedEvent { event }) =
-  case event of
-    Just (ControlChange _ _ n) -> Just $ reMap (vec2 0.0 127.0) spacePos (toNumber n)
-    _ -> Nothing
-
---------------------------------------------------------------------------------
 -- CONFIG
 --------------------------------------------------------------------------------
 
-mkConfig scenes context = do
+--mkConfig :: NonEmptyArray Scene -> Config
+mkConfig scenes = do
   randomField <- range 0 n # mapM (const randVec)
   pure $ Config
     { randomField
@@ -244,8 +235,17 @@ vec2to3 vec z =
 -- MORPH CHAIN
 --------------------------------------------------------------------------------
 
-combineTimeFunctions :: forall a . Script a -> Number -> Maybe a
-combineTimeFunctions (Script xs) time =
+instance semigroupScaleFn :: Semigroup (ScaleFn a) where
+  append (ScaleFn t1 f1) (ScaleFn t2 f2) = ScaleFn (t1 + t2) f
+    where
+      f t = if t < t1 then f1 t else f2 (t - t1)
+
+toFunction :: forall a. ScaleFn a -> Time -> a
+toFunction (ScaleFn _ f) = f
+
+
+combineTimeFunctions :: forall a . Script' a -> Number -> Maybe a
+combineTimeFunctions (Script' xs) time =
   filter (\{ absDuration } -> absDuration > time) fnLookup
     # head -- @TODO remove filter + head
     # map (\{ absDuration, duration, f } -> f ((time - (absDuration - duration)) / duration))
@@ -267,7 +267,7 @@ morph' x y t = morph t x y
 initState :: State
 initState =
   State
-    { pct : 0.0
+    { pcts : { "n1" : 0.0, "n2" : 0.0 }
     , time : 0.0
     , size : vec2 0 0
     }
@@ -281,8 +281,8 @@ update sig state@(State st) =
     SigSize { w, h } ->
       State $ st { size = vec2 w h }
 
-    SigInput (Input _ pct) ->
-      State $ st { pct = pct }
+    SigInput (Input '1' pct) -> State $ st { pcts {"n1" = pct} }
+    SigInput (Input '2' pct) -> State $ st { pcts {"n2" = pct} }
 
     _ -> state
 
@@ -290,23 +290,17 @@ update sig state@(State st) =
 -- SELECTORS
 --------------------------------------------------------------------------------
 
-selectScript :: Config -> State -> Script (Array Triangle)
-selectScript (Config { randomField, scenes }) state =
-  head scenes
-    # map (snoc scenes)
-    # maybe [] id
-    # section2 1
-    # concatMap f
-    # Script
+selectScaleFn :: Config -> State -> ScaleFn Scene
+selectScaleFn (Config { scenes, randomField }) state =
+  NE.concatMap f scenes
+    # fold1
   where
-    f ((Scene tri1) /\ (Scene tri2)) =
-      [ mkEntry tri1 randomTriangles
-      , mkEntry randomTriangles tri2
-      ]
-    mkEntry from to =
-      { duration : 1.0 / toNumber n, f : morph' from to }
-    n = length scenes * 2
-    randomTriangles = map (\v -> Triangle v v v) randomField
+    f scene =
+      NE.singleton (ScaleFn 1.0 (morph' randomScene scene)) <>
+      NE.singleton (ScaleFn 1.0 (morph' scene randomScene))
+
+    n = NE.length scenes * 2
+    randomScene = Scene $ map (\v -> Triangle v v v) randomField
 
 --------------------------------------------------------------------------------
 -- RENDER
@@ -321,7 +315,7 @@ type Bindings a  = { aVertexPosition :: Attribute Gl.Vec3
 
 render :: forall eff a
         . Config -> State -> Bindings a -> Eff ( webgl :: WebGl, console :: CONSOLE | eff) Unit
-render config@(Config { movingTriangles, scenes, randomField }) state@(State { pct, time, size }) bindings =
+render config@(Config { movingTriangles, scenes, randomField }) state@(State { pcts, time, size }) bindings =
   do
     clear [ COLOR_BUFFER_BIT, DEPTH_BUFFER_BIT ]
     setUniformFloats bindings.uPMatrix (M.toArray pMatrix)
@@ -330,27 +324,23 @@ render config@(Config { movingTriangles, scenes, randomField }) state@(State { p
     let (Tuple w h) = get2 size
     viewport 0 0 w h
 
+    log $ show [pcts.n1, pcts.n2]
 
-    buf <- makeBufferFloat xs'
+    buf <- makeBufferFloat xs
 
     drawArr TRIANGLES buf bindings.aVertexPosition
 
     where
-      xs =
-        movingTriangles
-          # mapWithPct (\pct' (Tuple t1 t2) -> morph (getPct pct') t1 t2)
-          # concatMap (\(Triangle p1 p2 p3) -> concatMap toArray [ p1, p2, p3 ])
 
-      script = selectScript config state
+      scaleFn = selectScaleFn config state
 
-      t = sin (time / loopTime * two * pi) # reMap spaceNegPos spacePos
+      t = pcts.n2 * 4.0
+        --((sin (time / loopTime * two * pi) # reMap spaceNegPos spacePos ) * pcts.n1) +
 
-      xs' =
-        combineTimeFunctions script t
-          # maybe [] id
-          # concatMap (\(Triangle p1 p2 p3) -> concatMap toArray [ p1, p2, p3 ])
+      xs = (toFunction scaleFn) t
+        # (\(Scene tris) -> concatMap (\(Triangle p1 p2 p3) -> concatMap toArray [ p1, p2, p3 ]) tris)
 
-      loopTime = 60.0 * 1000.0 * pct
+      loopTime = 60.0 * 1000.0 * pcts.n1
 
       getPct offsetPct =
         sin ((time / loopTime * two * pi) + (offsetPct * loopTime))
@@ -382,14 +372,15 @@ get2 vec = Tuple (get2X vec) (get2Y vec)
 -- DATA
 --------------------------------------------------------------------------------
 
-getScenes :: forall e . Aff (ajax:: AJAX | e) (Array Scene)
+getScenes :: forall e . Aff (ajax:: AJAX | e) (NonEmptyArray Scene)
 getScenes = do
   paths <- getIndex indexDir <#> filter predFn
-  mapM getScene paths
+  mapM getScene paths >>= fromArray >>> maybe' (\_ -> fail errMsgEmpty) pure
   where
     predFn = fileName >>> extension >>> map ((==) objExt) >>> maybe false id
     objExt = unsafePartial $ unsafeFromString "obj"
     indexDir = rootDir </> dir (SProxy :: SProxy "data")
+    errMsgEmpty = "no scenes"
 
 getIndex :: forall e . AbsDir -> Aff (ajax:: AJAX | e) (Array AbsFile)
 getIndex folder =
@@ -551,6 +542,9 @@ instance morphArray :: Morph a => Morph (Array a) where
   morph pct xs ys =
     zipWith (morph pct) xs ys
 
+instance morphScene :: Morph Scene where
+  morph pct (Scene s1) (Scene s2) = Scene $ morph pct s1 s2
+
 --------------------------------------------------------------------------------
 -- TYPES
 --------------------------------------------------------------------------------
@@ -564,7 +558,7 @@ type Vec2n = Vec2 Number
 type Vec2i = Vec2 Int
 
 newtype State = State
-  { pct :: Number
+  { pcts :: { "n1" :: Number, "n2" :: Number }
   , time :: Number
   , size :: Vec2i
   }
@@ -574,12 +568,12 @@ type Pair a = Vec2 a
 newtype Config = Config
   { movingTriangles :: Array (Tuple Triangle Triangle) -- @TODO
   , randomField :: Array Vec3n
-  , scenes :: Array Scene
+  , scenes :: NonEmptyArray Scene
   }
 
 newtype Scene = Scene (Array Triangle)
 
-newtype Script a = Script (Array { duration :: Number, f :: Number -> a })
+newtype Script' a = Script' (Array { duration :: Number, f :: Number -> a })
 
 data Sig
   = SigTime Number
@@ -590,3 +584,5 @@ data Sig
   | SigInput Input
 
 data Input = Input Char Number
+
+data ScaleFn a = ScaleFn Time (Time -> a)
