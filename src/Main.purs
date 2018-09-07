@@ -37,7 +37,7 @@ import Graphics.WebGLAll as Gl
 import Math (pi, sin, (%))
 import Network.HTTP.Affjax (AJAX, get)
 import Partial.Unsafe (unsafePartial)
-import Pathy (class IsDirOrFile, class IsRelOrAbs, AbsDir, AbsFile, RelFile, SandboxedPath, dir, extension, file, fileName, parseRelFile, posixParser, posixPrinter, printPath, rootDir, sandboxAny, (</>))
+import Pathy (class IsDirOrFile, class IsRelOrAbs, AbsDir, AbsFile, RelDir, RelFile, SandboxedPath, dir, extension, file, fileName, parseRelFile, posixParser, posixPrinter, printPath, rootDir, sandboxAny, unsafePrintPath, (</>))
 import Prelude (class Semigroup, Unit, bind, const, discard, flip, id, map, max, negate, pure, show, sub, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>>=), (>>>))
 import Signal (Signal, filterMap, foldp, map2, merge, mergeMany, runSignal, (~>))
 import Signal.Channel (CHANNEL, subscribe)
@@ -336,7 +336,7 @@ mapWithPct f xs =
 
 renderInit :: forall eff . Config -> Eff ( webgl :: WebGl | eff ) Unit
 renderInit _ = do
-  clearColor 0.0 0.5 0.0 1.0
+  clearColor 0.5 0.5 0.5 1.0
   enable DEPTH_TEST
 
 get2 :: forall a . Vec2 a -> Tuple a a
@@ -353,10 +353,10 @@ getScenes = do
   where
     predFn = fileName >>> extension >>> map ((==) objExt) >>> maybe false id
     objExt = unsafePartial $ unsafeFromString "obj"
-    indexDir = rootDir </> dir (SProxy :: SProxy "data")
+    indexDir = dir (SProxy :: SProxy "data")
     errMsgEmpty = "no scenes"
 
-getIndex :: forall e . AbsDir -> Aff (ajax:: AJAX | e) (Array AbsFile)
+getIndex :: forall e . RelDir -> Aff (ajax:: AJAX | e) (Array RelFile)
 getIndex folder =
   get (printPath' (sandboxAny path))
     >>= (_.response >>> parseIndexFile >>> either fail pure)
@@ -366,7 +366,7 @@ getIndex folder =
     indexFile = file (SProxy :: SProxy "index.txt")
 
 printPath' :: forall a b. IsRelOrAbs a => IsDirOrFile b => SandboxedPath a b -> String
-printPath' path = printPath posixPrinter path
+printPath' path = unsafePrintPath posixPrinter path
 
 parseIndexFile :: String -> Either String (Array RelFile)
 parseIndexFile str =
@@ -377,7 +377,7 @@ parseIndexFile str =
   where
     errMsg = "Invalid index file"
 
-getScene :: forall e . AbsFile -> Aff (ajax:: AJAX | e) Scene
+getScene :: forall e . RelFile -> Aff (ajax:: AJAX | e) Scene
 getScene path = do
   { response } <- get (printPath' (sandboxAny path))
   case readWFObj response # parse # runExcept of
