@@ -1,10 +1,7 @@
 {
-  "name": "purescript-webgl",
-  "homepage": "https://github.com/jutaro/purescript-webgl",
-  "authors": [
-    "Jürgen Nicklisch-Franken <juergen.nicklisch@symbolian.net>",
-    "Michael Karg <michael.karg@symbolian.net>"
-  ],
+  "name": "sceneries",
+  "homepage": "",
+  "authors": [],
   "description": "WebGL binding for purescript",
   "keywords": [
     "purescript"
@@ -23,7 +20,7 @@
   ],
   "dependencies": {
     "purescript-psci-support": "^3.0.0",
-    "purescript-signal": "^10.0.0",
+    "purescript-signal": "^9.0.0",
     "purescript-midi": "^1.2.0",
     "purescript-pathy": "^5.0.0",
     "purescript-webgl": "^2.0.1",
@@ -35,10 +32,12 @@
     "purescript-vector": "^2.0.0",
     "purescript-typedarray": "^2.1.0",
     "purescript-affjax": "^4.0.0",
-    "purescript-numbers": "^5.0.0"
+    "purescript-numbers": "^5.0.0",
+    "purescript-prelude": "^3.3.0"
   },
   "resolutions": {
     "purescript-extensions": "^2.2.0",
-    "purescript-arraybuffer-types": "^2.0.0"
+    "purescript-arraybuffer-types": "^2.0.0",
+    "purescript-js-date": "^5.2.0"
   }
 }
