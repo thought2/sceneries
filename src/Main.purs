@@ -1,61 +1,48 @@
 module Main where
 
-import Control.Monad.Aff (Aff, Canceler(..), runAff)
+import Control.Monad.Aff (Aff, runAff)
 import Control.Monad.Eff (Eff, kind Effect)
 import Control.Monad.Eff.Console (CONSOLE, log)
-import Control.Monad.Eff.Random (RANDOM, random)
-import Control.Monad.Eff.Timer (TIMER)
+import Control.Monad.Eff.Random (random)
 import Control.Monad.Except (runExcept)
 import DOM (DOM)
-import Data.Array (concat, concatMap, drop, filter, foldr, head, index, init, last, length, mapWithIndex, range, snoc, take, unsafeIndex, zipWith)
+import Data.Array (concat, concatMap, drop, filter, foldr, index, length, mapWithIndex, range, snoc, take, zipWith)
 import Data.Array.NonEmpty (NonEmptyArray, fromArray)
 import Data.Array.NonEmpty as NE
-import Data.Bifunctor (lmap)
 import Data.Char (fromCharCode, toCharCode)
-import Data.Either (Either(Right, Left), either, fromRight)
+import Data.Either (Either(Right, Left), either)
 import Data.Eq ((/=))
-import Data.Foreign (F, Foreign, readArray, readInt, readNumber, toForeign)
+import Data.Foreign (F, Foreign, readArray, readInt, readNumber)
 import Data.Foreign.Index (readProp)
-import Data.HTTP.Method (Method(..))
-import Data.Int (even, toNumber)
+import Data.Int (toNumber)
 import Data.List.NonEmpty as NEList
 import Data.Matrix (toArray) as M
 import Data.Matrix4 (identity, makePerspective, translate) as M
 import Data.Maybe (Maybe(..), fromJust, maybe, maybe')
 import Data.Midi (Event(..), TimedEvent(..))
-import Data.Midi.Parser (parseMidiEvent)
-import Data.Midi.WebMidi (createEventChannel, listen)
-import Data.Monoid (class Monoid, mempty)
+import Data.Midi.WebMidi (createEventChannel)
 import Data.Semigroup.Foldable (fold1)
 import Data.String (Pattern(..), split)
 import Data.String.NonEmpty (unsafeFromString)
 import Data.Symbol (SProxy(..))
-import Data.Traversable (Accum, mapAccumL, mapAccumR)
-import Data.Traversable.Accum (Accum)
 import Data.Tuple (Tuple(..), uncurry)
-import Data.Tuple.Nested (type (/\), (/\))
+import Data.Tuple.Nested ((/\))
 import Data.TypeNat (Three, Two)
 import Data.Vector (Vec, toArray)
 import Data.Vector2 (Vec2, get2X, get2Y, vec2)
-import Data.Vector3 (Vec3, get3X, get3Y, vec3)
+import Data.Vector3 (Vec3, vec3)
 import Extensions (fail, mapM)
-import Graphics.WebGLAll (Attribute, Capacity(..), Mask(..), Mat4, Mode(..), Shaders(..), Uniform, WebGLProg, WebGl, WebGLContext, clear, clearColor, drawArr, enable, getCanvasHeight, getCanvasWidth, makeBufferFloat, requestAnimationFrame, runWebGL, setUniformFloats, viewport, withShaders)
+import Graphics.WebGLAll (Attribute, Capacity(DEPTH_TEST), Mask(DEPTH_BUFFER_BIT, COLOR_BUFFER_BIT), Mat4, Mode(TRIANGLES), Shaders(Shaders), Uniform, WebGLProg, WebGl, clear, clearColor, drawArr, enable, makeBufferFloat, runWebGL, setUniformFloats, viewport, withShaders)
 import Graphics.WebGLAll as Gl
-import Math (pi, sin)
-import Network.HTTP.Affjax (AJAX, Affjax, URL, affjax, defaultRequest, get)
-import Partial (crash)
-import Partial.Unsafe (unsafePartial, unsafePartialBecause)
-import Pathy (class IsDirOrFile, class IsRelOrAbs, AbsDir, AbsFile, Name(..), RelFile, SandboxedPath, dir, extension, file, fileName, name, parseRelFile, posixParser, posixPrinter, printPath, rootDir, sandboxAny, (</>))
-import Prelude (class Semigroup, Unit, bind, const, discard, flip, id, map, max, negate, pure, show, sub, unit, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>), (>>=), (>>>))
-import Signal (Signal, constant, filterMap, foldp, map2, merge, mergeMany, runSignal, (~>))
+import Math (pi, sin, (%))
+import Network.HTTP.Affjax (AJAX, get)
+import Partial.Unsafe (unsafePartial)
+import Pathy (class IsDirOrFile, class IsRelOrAbs, AbsDir, AbsFile, RelFile, SandboxedPath, dir, extension, file, fileName, parseRelFile, posixParser, posixPrinter, printPath, rootDir, sandboxAny, (</>))
+import Prelude (class Semigroup, Unit, bind, const, discard, flip, id, map, max, negate, pure, show, sub, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>>=), (>>>))
+import Signal (Signal, filterMap, foldp, map2, merge, mergeMany, runSignal, (~>))
 import Signal.Channel (CHANNEL, subscribe)
 import Signal.DOM (DimensionPair, CoordinatePair, animationFrame, keyPressed, mousePos, windowDimensions)
-import Signal.Time (Time, every, millisecond, second)
-import System.Clock (CLOCK, milliseconds)
-import Text.Parsing.Parser (Parser, runParser)
-import Type.Prelude (False)
-import URI (Path(..), URI(..))
-import URI.Path as Path
+import Signal.Time (Time)
 
 --------------------------------------------------------------------------------
 -- SHADERS
@@ -187,12 +174,6 @@ midiInput = do
     f _ = Nothing
     reMap' n = reMap (vec2 0.0 127.0) spacePos (toNumber n)
 
---------------------------------------------------------------------------------
--- INPUT CONTROL
---------------------------------------------------------------------------------
-
-data Key = CharKey Char
-
 keyToInt :: Key -> Int
 keyToInt key = case key of
   CharKey char -> toCharCode char
@@ -210,7 +191,6 @@ mkConfig scenes = do
   pure $ Config
     { randomField
     , scenes
-    , movingTriangles : []
     }
   where
     n = map (\(Scene s) -> length s) scenes # foldr max 0
@@ -242,20 +222,6 @@ instance semigroupScaleFn :: Semigroup (ScaleFn a) where
 
 toFunction :: forall a. ScaleFn a -> Time -> a
 toFunction (ScaleFn _ f) = f
-
-
-combineTimeFunctions :: forall a . Script' a -> Number -> Maybe a
-combineTimeFunctions (Script' xs) time =
-  filter (\{ absDuration } -> absDuration > time) fnLookup
-    # head -- @TODO remove filter + head
-    # map (\{ absDuration, duration, f } -> f ((time - (absDuration - duration)) / duration))
-  where
-    fnLookup = mapAccumL combine 0.0 xs # _.value
-    combine absDuration { duration, f } =
-      let absDuration' = absDuration + duration in
-      { accum : absDuration'
-      , value : { absDuration : absDuration', duration, f }
-      }
 
 morph' :: forall a . Morph a => a -> a -> Number -> a
 morph' x y t = morph t x y
@@ -315,7 +281,7 @@ type Bindings a  = { aVertexPosition :: Attribute Gl.Vec3
 
 render :: forall eff a
         . Config -> State -> Bindings a -> Eff ( webgl :: WebGl, console :: CONSOLE | eff) Unit
-render config@(Config { movingTriangles, scenes, randomField }) state@(State { pcts, time, size }) bindings =
+render config@(Config { scenes, randomField }) state@(State { pcts, time, size }) bindings =
   do
     clear [ COLOR_BUFFER_BIT, DEPTH_BUFFER_BIT ]
     setUniformFloats bindings.uPMatrix (M.toArray pMatrix)
@@ -332,15 +298,23 @@ render config@(Config { movingTriangles, scenes, randomField }) state@(State { p
 
     where
 
-      scaleFn = selectScaleFn config state
+      ScaleFn dur scaleFn = selectScaleFn config state
 
-      t = pcts.n2 * 4.0
-        --((sin (time / loopTime * two * pi) # reMap spaceNegPos spacePos ) * pcts.n1) +
+      velocity = pcts.n1
 
-      xs = (toFunction scaleFn) t
-        # (\(Scene tris) -> concatMap (\(Triangle p1 p2 p3) -> concatMap toArray [ p1, p2, p3 ]) tris)
+      t = sin ((time / loopTime) * two * pi)
+          # reMap spaceNegPos spacePos
 
-      loopTime = 60.0 * 1000.0 * pcts.n1
+      t' = pcts.n2
+
+      t'' = (time / loopTime) % 1.0
+
+      xs = do
+        let (Scene tris) = scaleFn (t'' * dur)
+        (Triangle p1 p2 p3) <- tris
+        concatMap toArray [ p1, p2, p3 ]
+
+      loopTime = 20.0 * 1000.0
 
       getPct offsetPct =
         sin ((time / loopTime * two * pi) + (offsetPct * loopTime))
@@ -549,13 +523,10 @@ instance morphScene :: Morph Scene where
 -- TYPES
 --------------------------------------------------------------------------------
 
-data Cube = Cube { triangles :: Array Vec3n }
-
-data Triangle = Triangle Vec3n Vec3n Vec3n
-
-type Vec3n = Vec3 Number
-type Vec2n = Vec2 Number
-type Vec2i = Vec2 Int
+newtype Config = Config
+  { randomField :: Array Vec3n
+  , scenes :: NonEmptyArray Scene
+  }
 
 newtype State = State
   { pcts :: { "n1" :: Number, "n2" :: Number }
@@ -563,17 +534,15 @@ newtype State = State
   , size :: Vec2i
   }
 
-type Pair a = Vec2 a
-
-newtype Config = Config
-  { movingTriangles :: Array (Tuple Triangle Triangle) -- @TODO
-  , randomField :: Array Vec3n
-  , scenes :: NonEmptyArray Scene
-  }
-
 newtype Scene = Scene (Array Triangle)
 
-newtype Script' a = Script' (Array { duration :: Number, f :: Number -> a })
+data Triangle = Triangle Vec3n Vec3n Vec3n
+
+type Vec3n = Vec3 Number
+type Vec2n = Vec2 Number
+type Vec2i = Vec2 Int
+
+type Pair a = Vec2 a
 
 data Sig
   = SigTime Number
@@ -586,3 +555,5 @@ data Sig
 data Input = Input Char Number
 
 data ScaleFn a = ScaleFn Time (Time -> a)
+
+data Key = CharKey Char
