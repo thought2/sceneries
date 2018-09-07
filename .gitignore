@@ -10,3 +10,4 @@ dist/*.js
 .bower.json
 bower.json.local
 .DS_Store
+public/main.js
