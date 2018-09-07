@@ -22,6 +22,7 @@
     "package.json"
   ],
   "dependencies": {
+    "purescript-psci-support": "^3.0.0",
     "purescript-signal": "^10.0.0",
     "purescript-midi": "^1.2.0",
     "purescript-pathy": "^5.0.0",
