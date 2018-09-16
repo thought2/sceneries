@@ -18,7 +18,11 @@
     "Gruntfile.js",
     "package.json"
   ],
-  "dependencies": {
+    "dependencies": {
+    "purescript-typelevel": "^3.0.0",
+    "purescript-debug": "^3.0.0",
+    "purescript-colors": "^4.3.0",
+    "purescript-record": "^0.2.6",
     "purescript-psci-support": "^3.0.0",
     "purescript-signal": "^9.0.0",
     "purescript-midi": "^1.2.0",

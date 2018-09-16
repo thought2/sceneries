@@ -1,8 +1,11 @@
 {
   "private": false,
   "devDependencies": {
+    "adhoc": "^0.2.0"
   },
-  "scripts": {},
+  "scripts": {
+    "start": "pulp --watch browserify --to public/main.js & adhoc -p 8000 public"
+  },
   "name": "sceneries",
   "description": "",
   "version": "1.0.0",
