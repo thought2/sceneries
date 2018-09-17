@@ -1,28 +1,25 @@
 module Main where
 
 import Color (Color, graytone, toRGBA')
-import Control.Monad.Aff (Aff, Canceler(..), launchAff, liftEff', makeAff, makeAff', runAff)
+import Control.Monad.Aff (Aff, Canceler, launchAff, makeAff)
 import Control.Monad.Eff (Eff, kind Effect)
 import Control.Monad.Eff.Class (liftEff)
-import Control.Monad.Eff.Console (CONSOLE, log)
-import Control.Monad.Eff.Exception (EXCEPTION, Error, error, message)
+import Control.Monad.Eff.Console (CONSOLE)
+import Control.Monad.Eff.Exception (EXCEPTION, error)
 import Control.Monad.Eff.Random (RANDOM, random)
 import Control.Monad.Eff.Timer (TIMER)
 import Control.Monad.Eff.Unsafe (unsafeCoerceEff)
 import Control.Monad.Except (runExcept)
-import Control.Parallel (parallel)
 import DOM (DOM)
-import Data.Array (concat, concatMap, drop, filter, foldr, index, insertAt, length, mapWithIndex, range, snoc, take, unsafeIndex, zip, zipWith)
+import Data.Array (concat, concatMap, drop, filter, foldr, index, insertAt, length, mapWithIndex, modifyAt, range, replicate, snoc, take, unsafeIndex, zipWith)
 import Data.Array.NonEmpty (NonEmptyArray, fromArray)
-import Data.Array.NonEmpty as NE
 import Data.Char (fromCharCode, toCharCode)
 import Data.Either (Either(Right, Left), either)
-import Data.Enum (class Enum, succ)
 import Data.Eq (class Eq, (/=))
-import Data.Foreign (F, Foreign, readArray, readInt, readNumber, toForeign)
+import Data.Foldable (class Foldable, foldl)
+import Data.Foreign (F, Foreign, readArray, readInt, readNumber)
 import Data.Foreign.Index (readProp)
 import Data.Generic.Rep (class Generic)
-import Data.Generic.Rep.Enum (genericPred, genericSucc)
 import Data.Generic.Rep.Eq (genericEq)
 import Data.Generic.Rep.Monoid (genericMempty)
 import Data.Generic.Rep.Ord (genericCompare)
@@ -38,16 +35,15 @@ import Data.Midi.WebMidi (createEventChannel)
 import Data.Monoid (class Monoid, mempty)
 import Data.Record.Builder (build)
 import Data.Record.Builder as RB
-import Data.Semigroup.Foldable (fold1, foldMap1)
+import Data.Semigroup.Foldable (foldMap1)
 import Data.String (Pattern(..), split)
 import Data.String.NonEmpty (unsafeFromString)
 import Data.Symbol (SProxy(..))
 import Data.Tuple (Tuple(..), uncurry)
 import Data.Tuple.Nested ((/\))
-import Data.TypeNat (class Sized, Three, Two, sized)
-import Data.Typelevel.Num (class Lt, class Nat, class Pos, class Trich, D0, D1, D2, D3, D4, D9, d0, d1, d2, d3, d4, d5, d6, reifyInt, toInt)
-import Data.Typelevel.Undefined (undefined)
-import Data.Vector (Vec(..), fill, toArray)
+import Data.TypeNat (class Sized, Three, Two)
+import Data.Typelevel.Num (class Add, class Lt, class Nat, D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, toInt)
+import Data.Vector (Vec(Vec), toArray)
 import Data.Vector2 (Vec2, get2X, get2Y, vec2)
 import Data.Vector3 (Vec3, vec3)
 import Debug.Trace (spy)
@@ -57,13 +53,18 @@ import Graphics.WebGLAll as Gl
 import Math (cos, pi, sin, (%))
 import Network.HTTP.Affjax (AJAX, get)
 import Partial.Unsafe (unsafePartial)
-import Pathy (class IsDirOrFile, class IsRelOrAbs, AbsDir, AbsFile, Dir, Path, Rel, RelDir, RelFile, SandboxedPath, dir, extension, file, fileName, parseRelFile, posixParser, posixPrinter, printPath, rootDir, sandboxAny, unsafePrintPath, (</>))
-import Prelude (class Functor, class Ord, class Semigroup, class Show, Unit, bind, compare, const, discard, flip, id, map, max, negate, pure, show, sub, unit, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>>=), (>>>))
+import Pathy (class IsDirOrFile, class IsRelOrAbs, Dir, Path, Rel, RelDir, RelFile, SandboxedPath, dir, extension, file, fileName, parseRelFile, posixParser, posixPrinter, sandboxAny, unsafePrintPath, (</>))
+import Prelude (class Apply, class Functor, class Ord, class Semigroup, class Show, Unit, bind, const, discard, flip, id, map, max, negate, pure, show, sub, unit, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>>=), (>>>))
 import Signal (Signal, filterMap, foldp, map2, merge, mergeMany, runSignal, (~>))
 import Signal.Channel (CHANNEL, subscribe)
 import Signal.DOM (DimensionPair, CoordinatePair, animationFrame, keyPressed, mousePos, windowDimensions)
 import Signal.Time (Time)
-import Type.Prelude (Proxy(..))
+
+{- GENERATE imports -}
+
+import Data.Typelevel.Num (class Lt, class Nat, D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9)
+
+{- GENERATE END -}
 
 --------------------------------------------------------------------------------
 -- SHADERS
@@ -774,25 +775,259 @@ setNine idx n (Vec v) = Vec (unsafePartial $ fromJust (insertAt (idxNineToInt id
 
 newtype Vec' s a = Vec' (Array a)
 
-vec0' :: forall a. Vec' D1 a
+--type SetFn i s a = Nat i => Nat s => Lt i s => a -> Vec' s a -> Vec' s a
+
+{- GENERATE vecs -}
+
+-- Constructors
+
+vec0' :: forall a. Vec' D0 a
 vec0' = Vec' [ ]
 
 vec1' :: forall a. a -> Vec' D1 a
-vec1' x1 = Vec' [ x1 ]
+vec1' x0 = Vec' [ x0 ]
 
 vec2' :: forall a. a -> a -> Vec' D2 a
-vec2' x1 x2 = Vec' [ x1, x2 ]
+vec2' x0 x1 = Vec' [ x0, x1 ]
 
 vec3' :: forall a. a -> a -> a -> Vec' D3 a
-vec3' x1 x2 x3 = Vec' [ x1, x2, x3 ]
+vec3' x0 x1 x2 = Vec' [ x0, x1, x2 ]
 
 vec4' :: forall a. a -> a -> a -> a -> Vec' D4 a
-vec4' x1 x2 x3 x4 = Vec' [ x1, x2, x3, x4 ]
+vec4' x0 x1 x2 x3 = Vec' [ x0, x1, x2, x3 ]
 
--- ...
+vec5' :: forall a. a -> a -> a -> a -> a -> Vec' D5 a
+vec5' x0 x1 x2 x3 x4 = Vec' [ x0, x1, x2, x3, x4 ]
+
+vec6' :: forall a. a -> a -> a -> a -> a -> a -> Vec' D6 a
+vec6' x0 x1 x2 x3 x4 x5 = Vec' [ x0, x1, x2, x3, x4, x5 ]
+
+vec7' :: forall a. a -> a -> a -> a -> a -> a -> a -> Vec' D7 a
+vec7' x0 x1 x2 x3 x4 x5 x6 = Vec' [ x0, x1, x2, x3, x4, x5, x6 ]
+
+vec8' :: forall a. a -> a -> a -> a -> a -> a -> a -> a -> Vec' D8 a
+vec8' x0 x1 x2 x3 x4 x5 x6 x7 = Vec' [ x0, x1, x2, x3, x4, x5, x6, x7 ]
 
 vec9' :: forall a. a -> a -> a -> a -> a -> a -> a -> a -> a -> Vec' D9 a
-vec9' x1 x2 x3 x4 x5 x6 x7 x8 x9 = Vec' [ x1, x2, x3, x4, x5, x6, x7, x8, x9 ]
+vec9' x0 x1 x2 x3 x4 x5 x6 x7 x8 = Vec' [ x0, x1, x2, x3, x4, x5, x6, x7, x8 ]
+
+-- Getters by Index
+
+get0' :: forall s a. Nat s => Lt D0 s => Vec' s a -> a
+get0' = get' d0
+
+get1' :: forall s a. Nat s => Lt D1 s => Vec' s a -> a
+get1' = get' d1
+
+get2' :: forall s a. Nat s => Lt D2 s => Vec' s a -> a
+get2' = get' d2
+
+get3' :: forall s a. Nat s => Lt D3 s => Vec' s a -> a
+get3' = get' d3
+
+get4' :: forall s a. Nat s => Lt D4 s => Vec' s a -> a
+get4' = get' d4
+
+get5' :: forall s a. Nat s => Lt D5 s => Vec' s a -> a
+get5' = get' d5
+
+get6' :: forall s a. Nat s => Lt D6 s => Vec' s a -> a
+get6' = get' d6
+
+get7' :: forall s a. Nat s => Lt D7 s => Vec' s a -> a
+get7' = get' d7
+
+get8' :: forall s a. Nat s => Lt D8 s => Vec' s a -> a
+get8' = get' d8
+
+get9' :: forall s a. Nat s => Lt D9 s => Vec' s a -> a
+get9' = get' d9
+
+-- Getters by XYZW
+
+getX' :: forall s a. Nat s => Lt D0 s => Vec' s a -> a
+getX' = get' d0
+
+getY' :: forall s a. Nat s => Lt D1 s => Vec' s a -> a
+getY' = get' d1
+
+getZ' :: forall s a. Nat s => Lt D2 s => Vec' s a -> a
+getZ' = get' d2
+
+getW' :: forall s a. Nat s => Lt D3 s => Vec' s a -> a
+getW' = get' d3
+
+-- Getters by RGBA
+
+getR' :: forall s a. Nat s => Lt D0 s => Vec' s a -> a
+getR' = get' d0
+
+getG' :: forall s a. Nat s => Lt D1 s => Vec' s a -> a
+getG' = get' d1
+
+getB' :: forall s a. Nat s => Lt D2 s => Vec' s a -> a
+getB' = get' d2
+
+getA' :: forall s a. Nat s => Lt D3 s => Vec' s a -> a
+getA' = get' d3
+
+-- Setters by Index
+
+set0' :: forall s a.
+  Nat s => Lt D0 s => a -> Vec' s a -> Vec' s a
+set0' = set' d0
+
+set1' :: forall s a.
+  Nat s => Lt D1 s => a -> Vec' s a -> Vec' s a
+set1' = set' d1
+
+set2' :: forall s a.
+  Nat s => Lt D2 s => a -> Vec' s a -> Vec' s a
+set2' = set' d2
+
+set3' :: forall s a.
+  Nat s => Lt D3 s => a -> Vec' s a -> Vec' s a
+set3' = set' d3
+
+set4' :: forall s a.
+  Nat s => Lt D4 s => a -> Vec' s a -> Vec' s a
+set4' = set' d4
+
+set5' :: forall s a.
+  Nat s => Lt D5 s => a -> Vec' s a -> Vec' s a
+set5' = set' d5
+
+set6' :: forall s a.
+  Nat s => Lt D6 s => a -> Vec' s a -> Vec' s a
+set6' = set' d6
+
+set7' :: forall s a.
+  Nat s => Lt D7 s => a -> Vec' s a -> Vec' s a
+set7' = set' d7
+
+set8' :: forall s a.
+  Nat s => Lt D8 s => a -> Vec' s a -> Vec' s a
+set8' = set' d8
+
+set9' :: forall s a.
+  Nat s => Lt D9 s => a -> Vec' s a -> Vec' s a
+set9' = set' d9
+
+-- Setters by XYZW
+
+setX' :: forall s a.
+  Nat s => Lt D0 s => a -> Vec' s a -> Vec' s a
+setX' = set' d0
+
+setY' :: forall s a.
+  Nat s => Lt D1 s => a -> Vec' s a -> Vec' s a
+setY' = set' d1
+
+setZ' :: forall s a.
+  Nat s => Lt D2 s => a -> Vec' s a -> Vec' s a
+setZ' = set' d2
+
+setW' :: forall s a.
+  Nat s => Lt D3 s => a -> Vec' s a -> Vec' s a
+setW' = set' d3
+
+-- Setters by RGBA
+
+setR' :: forall s a.
+  Nat s => Lt D0 s => a -> Vec' s a -> Vec' s a
+setR' = set' d0
+
+setG' :: forall s a.
+  Nat s => Lt D1 s => a -> Vec' s a -> Vec' s a
+setG' = set' d1
+
+setB' :: forall s a.
+  Nat s => Lt D2 s => a -> Vec' s a -> Vec' s a
+setB' = set' d2
+
+setA' :: forall s a.
+  Nat s => Lt D3 s => a -> Vec' s a -> Vec' s a
+setA' = set' d3
+
+-- Overs by Index
+
+over0' :: forall s a.
+  Nat s => Lt D0 s => (a -> a) -> Vec' s a -> Vec' s a
+over0' = over' d0
+
+over1' :: forall s a.
+  Nat s => Lt D1 s => (a -> a) -> Vec' s a -> Vec' s a
+over1' = over' d1
+
+over2' :: forall s a.
+  Nat s => Lt D2 s => (a -> a) -> Vec' s a -> Vec' s a
+over2' = over' d2
+
+over3' :: forall s a.
+  Nat s => Lt D3 s => (a -> a) -> Vec' s a -> Vec' s a
+over3' = over' d3
+
+over4' :: forall s a.
+  Nat s => Lt D4 s => (a -> a) -> Vec' s a -> Vec' s a
+over4' = over' d4
+
+over5' :: forall s a.
+  Nat s => Lt D5 s => (a -> a) -> Vec' s a -> Vec' s a
+over5' = over' d5
+
+over6' :: forall s a.
+  Nat s => Lt D6 s => (a -> a) -> Vec' s a -> Vec' s a
+over6' = over' d6
+
+over7' :: forall s a.
+  Nat s => Lt D7 s => (a -> a) -> Vec' s a -> Vec' s a
+over7' = over' d7
+
+over8' :: forall s a.
+  Nat s => Lt D8 s => (a -> a) -> Vec' s a -> Vec' s a
+over8' = over' d8
+
+over9' :: forall s a.
+  Nat s => Lt D9 s => (a -> a) -> Vec' s a -> Vec' s a
+over9' = over' d9
+
+-- Overs by XYZW
+
+overX' :: forall s a.
+  Nat s => Lt D0 s => (a -> a) -> Vec' s a -> Vec' s a
+overX' = over' d0
+
+overY' :: forall s a.
+  Nat s => Lt D1 s => (a -> a) -> Vec' s a -> Vec' s a
+overY' = over' d1
+
+overZ' :: forall s a.
+  Nat s => Lt D2 s => (a -> a) -> Vec' s a -> Vec' s a
+overZ' = over' d2
+
+overW' :: forall s a.
+  Nat s => Lt D3 s => (a -> a) -> Vec' s a -> Vec' s a
+overW' = over' d3
+
+-- Overs by RGBA
+
+overR' :: forall s a.
+  Nat s => Lt D0 s => (a -> a) -> Vec' s a -> Vec' s a
+overR' = over' d0
+
+overG' :: forall s a.
+  Nat s => Lt D1 s => (a -> a) -> Vec' s a -> Vec' s a
+overG' = over' d1
+
+overB' :: forall s a.
+  Nat s => Lt D2 s => (a -> a) -> Vec' s a -> Vec' s a
+overB' = over' d2
+
+overA' :: forall s a.
+  Nat s => Lt D3 s => (a -> a) -> Vec' s a -> Vec' s a
+overA' = over' d3
+
+{- GENERATE END -}
 
 get' :: forall i s a. Nat i => Nat s => Lt i s => i -> Vec' s a -> a
 get' i (Vec' xs) = unsafePartial $ unsafeIndex xs (toInt i)
@@ -800,19 +1035,8 @@ get' i (Vec' xs) = unsafePartial $ unsafeIndex xs (toInt i)
 set' :: forall i s a. Nat i => Nat s => Lt i s => i -> a -> Vec' s a -> Vec' s a
 set' i val (Vec' xs) = Vec' (unsafePartial $ fromJust (insertAt (toInt i) val xs))
 
-
-getX' :: forall s a. Nat s => Lt D0 s => Vec' s a -> a
-getX' x = get' d0 x
-
-getY' :: forall s a. Nat s => Lt D1 s => Vec' s a -> a
-getY' x = get' d1 x
-
-getZ' :: forall s a. Nat s => Lt D2 s => Vec' s a -> a
-getZ' x = get' d2 x
-
-getU' :: forall s a. Nat s => Lt D3 s => Vec' s a -> a
-getU' x = get' d3 x
-
+over' :: forall i s a. Nat i => Nat s => Lt i s => i -> (a -> a) -> Vec' s a -> Vec' s a
+over' i f (Vec' xs) = Vec' (unsafePartial $ fromJust (modifyAt (toInt i) f xs))
 
 derive instance genericVec' :: Generic (Vec' s a) _
 
@@ -825,11 +1049,31 @@ instance eqVec' :: Eq a => Eq (Vec' s a) where
 instance ordVec' :: Ord a => Ord (Vec' s a) where
   compare = genericCompare
 
+-- keep?
 instance semigroupVec' :: Semigroup (Vec' s a) where
   append = genericAppend
 
+-- keep?
 instance monoidVec' :: Monoid (Vec' s a) where
   mempty = genericMempty
+
+instance functorVec' :: Functor (Vec' s) where
+  map f (Vec' xs) = Vec' $ map f xs
+
+instance applyVec' :: Apply (Vec' s) where
+  apply (Vec' fs) (Vec' xs) = Vec' (zipWith ($) fs xs)
+
+instance foldableVec' :: Foldable (Vec' s) where
+  foldr f m (Vec' xs) = foldr f m xs
+  foldl f m (Vec' xs) = foldl f m xs
+  foldMap f xs = foldr (\x acc -> f x <> acc) mempty xs
+
+appendVecs :: forall s1 s2 s3 a.
+  Nat s1 => Nat s2 => Add s1 s2 s3 => Vec' s1 a -> Vec' s2 a -> Vec' s3 a
+appendVecs (Vec' xs) (Vec' ys) = Vec' (xs <> ys)
+
+replicateVec :: forall s a. Nat s => s -> a -> Vec' s a
+replicateVec n x = Vec' (replicate (toInt n) x)
 
 --------------------------------------------------------------------------------
 -- TEST

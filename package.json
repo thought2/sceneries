@@ -4,7 +4,8 @@
     "adhoc": "^0.2.0"
   },
   "scripts": {
-    "start": "pulp --watch browserify --to public/main.js & adhoc -p 8000 public"
+    "start": "pulp --watch browserify --to public/main.js & adhoc -p 8000 public",
+    "gen-src": "cd src-gen && pulp build && pulp run -- $PWD/../src"
   },
   "name": "sceneries",
   "description": "",
