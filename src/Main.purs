@@ -1,6 +1,7 @@
 module Main where
 
-import Color (Color, graytone, toRGBA')
+import Color (Color, fromInt, graytone, toRGBA')
+import Control.Apply (lift2)
 import Control.Monad.Aff (Aff, Canceler, launchAff, makeAff)
 import Control.Monad.Eff (Eff, kind Effect)
 import Control.Monad.Eff.Class (liftEff)
@@ -11,8 +12,10 @@ import Control.Monad.Eff.Timer (TIMER)
 import Control.Monad.Eff.Unsafe (unsafeCoerceEff)
 import Control.Monad.Except (runExcept)
 import DOM (DOM)
-import Data.Array (concat, concatMap, drop, filter, foldr, index, insertAt, length, mapWithIndex, modifyAt, range, replicate, snoc, take, unsafeIndex, zipWith)
+import Data.Array (concat, concatMap, drop, filter, foldr, index, insertAt, length, mapWithIndex, modifyAt, range, snoc, take, unsafeIndex, zipWith)
+import Data.Array as Arr
 import Data.Array.NonEmpty (NonEmptyArray, fromArray)
+import Data.Array.NonEmpty as NE
 import Data.Char (fromCharCode, toCharCode)
 import Data.Either (Either(Right, Left), either)
 import Data.Eq (class Eq, (/=))
@@ -21,9 +24,7 @@ import Data.Foreign (F, Foreign, readArray, readInt, readNumber)
 import Data.Foreign.Index (readProp)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Eq (genericEq)
-import Data.Generic.Rep.Monoid (genericMempty)
 import Data.Generic.Rep.Ord (genericCompare)
-import Data.Generic.Rep.Semigroup (genericAppend)
 import Data.Generic.Rep.Show (genericShow)
 import Data.Int (toNumber)
 import Data.List.NonEmpty as NEList
@@ -32,39 +33,44 @@ import Data.Matrix4 (identity, makePerspective, translate) as M
 import Data.Maybe (Maybe(..), fromJust, maybe, maybe')
 import Data.Midi (Event(..), TimedEvent(..))
 import Data.Midi.WebMidi (createEventChannel)
-import Data.Monoid (class Monoid, mempty)
+import Data.Monoid (mempty)
+import Data.Ord (between)
+import Data.Pair (Pair(Pair), (~))
 import Data.Record.Builder (build)
 import Data.Record.Builder as RB
 import Data.Semigroup.Foldable (foldMap1)
 import Data.String (Pattern(..), split)
+import Data.String as Str
 import Data.String.NonEmpty (unsafeFromString)
 import Data.Symbol (SProxy(..))
+import Data.Traversable (traverse)
 import Data.Tuple (Tuple(..), uncurry)
-import Data.Tuple.Nested ((/\))
-import Data.TypeNat (class Sized, Three, Two)
-import Data.Typelevel.Num (class Add, class Lt, class Nat, D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, toInt)
-import Data.Vector (Vec(Vec), toArray)
-import Data.Vector2 (Vec2, get2X, get2Y, vec2)
-import Data.Vector3 (Vec3, vec3)
+import Data.Tuple.Nested (Tuple1, Tuple2, Tuple4, Tuple3, tuple2, tuple3, tuple4, (/\))
+import Data.TypeNat (class Sized)
+import Data.Typelevel.Num (class Add, class Lt, class Nat, D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, reifyInt, toInt)
+import Data.Typelevel.Num (class Lt, class Nat, D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9)
+import Data.Typelevel.Undefined (undefined)
+import Data.Unfoldable (class Unfoldable, replicate, unfoldr)
+import Data.Vec (Vec, cons, empty, replicate', toArray, (!!), (+>))
+import Data.Vec as Vec
+import Data.Vec.Extra (Vec1, Vec2, Vec3, vec2, vec3)
+import Data.Vec.Extra as Vec
+import Data.Vector3 as Vector3
 import Debug.Trace (spy)
-import Extensions (fail, mapM)
+import Extensions (fail, mapM, replicateM)
 import Graphics.WebGLAll (Attribute, Capacity(DEPTH_TEST), EffWebGL, Mask(DEPTH_BUFFER_BIT, COLOR_BUFFER_BIT), Mat4, Mode(TRIANGLES), Shaders(Shaders), Uniform, WebGLContext, WebGLProg, WebGl, clear, clearColor, drawArr, enable, getCanvasHeight, getCanvasWidth, makeBufferFloat, runWebGL, setUniformFloats, viewport, withShaders)
 import Graphics.WebGLAll as Gl
 import Math (cos, pi, sin, (%))
-import Network.HTTP.Affjax (AJAX, get)
+import Network.HTTP.Affjax (AJAX)
+import Network.HTTP.Affjax as Ajax
 import Partial.Unsafe (unsafePartial)
 import Pathy (class IsDirOrFile, class IsRelOrAbs, Dir, Path, Rel, RelDir, RelFile, SandboxedPath, dir, extension, file, fileName, parseRelFile, posixParser, posixPrinter, sandboxAny, unsafePrintPath, (</>))
-import Prelude (class Apply, class Functor, class Ord, class Semigroup, class Show, Unit, bind, const, discard, flip, id, map, max, negate, pure, show, sub, unit, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>>=), (>>>))
+import Prelude (class Apply, class Functor, class Ord, class Semigroup, class Semiring, class Show, Unit, add, bind, const, discard, flip, id, map, max, mul, negate, not, one, otherwise, pure, show, sub, unit, zero, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>=>), (>>=), (>>>))
 import Signal (Signal, filterMap, foldp, map2, merge, mergeMany, runSignal, (~>))
 import Signal.Channel (CHANNEL, subscribe)
 import Signal.DOM (DimensionPair, CoordinatePair, animationFrame, keyPressed, mousePos, windowDimensions)
 import Signal.Time (Time)
-
-{- GENERATE imports -}
-
-import Data.Typelevel.Num (class Lt, class Nat, D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9)
-
-{- GENERATE END -}
+import Type.Prelude (Proxy(..))
 
 --------------------------------------------------------------------------------
 -- SHADERS
@@ -170,7 +176,7 @@ mainFrp config = do
   sigInput1 <- keyboardMouseInput <#> map SigInput
   sigInput2 <- midiInput <#> map SigInput
 
-  let signals = merge4 sigTime sigSize sigInput1 sigInput2
+  let signals = sigTime <> sigSize <> sigInput1 <> sigInput2
       sigState = foldp update (initState config) signals
 
   _ <- debug config signals sigState
@@ -217,26 +223,10 @@ midiInput = do
     # filterMap f (Input 0 0.5)
     # pure
   where
-    f (TimedEvent { event : (Just (ControlChange _ n pct)) }) =
-      case n of
-        14 -> Just $ Input 0 (reMap' pct)
-        15 -> Just $ Input 1 (reMap' pct)
-        16 -> Just $ Input 2 (reMap' pct)
-        17 -> Just $ Input 3 (reMap' pct)
-        18 -> Just $ Input 4 (reMap' pct)
-        19 -> Just $ Input 5 (reMap' pct)
-        20 -> Just $ Input 6 (reMap' pct)
-        21 -> Just $ Input 7 (reMap' pct)
-        22 -> Just $ Input 8 (reMap' pct)
-        _ -> Nothing
+    f (TimedEvent { event : (Just (ControlChange _ n pct)) })
+      | between 14 22 n = Just $ Input (n - 14) (reMap' pct)
     f _ = Nothing
-    reMap' n = reMap (vec2 0.0 127.0) spacePos (toNumber n)
-
-merge3 :: forall a. Signal a -> Signal a -> Signal a -> Signal a
-merge3 s1 s2 s3 = merge s1 s2 # merge s3
-
-merge4 :: forall a. Signal a -> Signal a -> Signal a -> Signal a -> Signal a
-merge4 s1 s2 s3 s4 = merge3 s1 s2 s3 # merge s4
+    reMap' n = reMap (vec2 zero 127.0) (vec2 zero one) (toNumber n)
 
 keyToInt :: Key -> Int
 keyToInt key = case key of
@@ -275,7 +265,7 @@ getDynConfig canvasContext = do
   liftEff $ do
     let n = map (\(Scene s) -> length s) scenes # foldr max 0
     size <- getCanvasSize canvasContext
-    randomField <- range 0 n # mapM (const randVec)
+    randomField <- range 0 n # mapM (const randVec3)
     pure $ DynConfig
       { randomField
       , scenes
@@ -284,40 +274,15 @@ getDynConfig canvasContext = do
       }
     where
       { fieldZ } = staticConfig'
-      randVec =
-        randomVec2n
-          <#> map (reMap spacePos spaceNegPos)
-          >>> (\v2 -> vec2to3 v2 fieldZ)
-
-
--- mkDynConfig scenes = do
---   randomField <- range 0 n # mapM (const randVec)
---   pure $ DynConfig
---     { randomField
---     , scenes
---     }
---   where
---     n = map (\(Scene s) -> length s) scenes # foldr max 0
---     randVec =
---       randomVec2n
---         <#> map (reMap spacePos spaceNegPos)
---         >>> (\v2 -> vec2to3 v2 18.0)
+      randVec2 = randomVec <#> map (reMap (vec2 zero one) (vec2 (-one) one))
+      randVec3 = Vec.snoc <$> pure fieldZ <*> randVec2
 
 getCanvasSize :: forall eff. WebGLContext -> Eff ( webgl :: WebGl | eff ) Vec2i
 getCanvasSize ctx =
-  vec2 <$> getCanvasWidth ctx <*> getCanvasHeight ctx
+  lift2 vec2 (getCanvasWidth ctx) (getCanvasHeight ctx)
 
-randomVec2n :: forall eff. EffRandom eff Vec2n
-randomVec2n =
-  vec2 <$> random <*> random
-
-randomVec3n :: forall eff. EffRandom eff Vec3n
-randomVec3n =
-  vec3 <$> random <*> random <*> random
-
-vec2to3 :: forall a . Vec2 a -> a -> Vec3 a
-vec2to3 vec z =
-  vec3 (get2X vec) (get2Y vec) z
+randomVec :: forall eff s. Nat s => EffRandom eff (Vec s Number)
+randomVec = pure random # traverse id
 
 --------------------------------------------------------------------------------
 -- MORPH CHAIN
@@ -326,7 +291,8 @@ vec2to3 vec z =
 instance semigroupScaleFn :: Semigroup (ScaleFn a) where
   append (ScaleFn t1 f1) (ScaleFn t2 f2) = ScaleFn (t1 + t2) f
     where
-      f t = if t < t1 then f1 t else f2 (t - t1)
+      f t | t < t1    = f1 t
+          | otherwise = f2 (t - t1)
 
 instance functorScaleFn :: Functor ScaleFn where
   map f (ScaleFn t f') = ScaleFn t (f' >>> f)
@@ -344,7 +310,7 @@ morph' x y t = morph t x y
 initState :: Config -> State
 initState (Config { size }) =
   State
-    { pcts : vec9' 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5 0.5
+    { pcts : replicate' 0.5
     , time : 0.0
     , size
     }
@@ -357,9 +323,16 @@ update sig state@(State st) =
 
     SigSize { w, h } ->
       State $ st { size = vec2 w h }
-
-    SigInput (Input 0 pct) -> State $ st { pcts = set' d0 pct st.pcts }
---    SigInput (Input IdxNine1 pct) -> State $ st { pcts = setNine IdxNine1 pct st.pcts }
+    
+    SigInput (Input 0 pct) -> State $ st { pcts = Vec.updateAt d0 pct st.pcts }
+    SigInput (Input 1 pct) -> State $ st { pcts = Vec.updateAt d1 pct st.pcts }
+    SigInput (Input 2 pct) -> State $ st { pcts = Vec.updateAt d2 pct st.pcts }
+    SigInput (Input 3 pct) -> State $ st { pcts = Vec.updateAt d3 pct st.pcts }
+    SigInput (Input 4 pct) -> State $ st { pcts = Vec.updateAt d4 pct st.pcts }
+    SigInput (Input 5 pct) -> State $ st { pcts = Vec.updateAt d5 pct st.pcts }
+    SigInput (Input 6 pct) -> State $ st { pcts = Vec.updateAt d6 pct st.pcts }
+    SigInput (Input 7 pct) -> State $ st { pcts = Vec.updateAt d7 pct st.pcts }
+    SigInput (Input 8 pct) -> State $ st { pcts = Vec.updateAt d8 pct st.pcts }
 
     _ -> state
 
@@ -376,7 +349,7 @@ selectScaleFn (Config { scenes, randomField }) state =
       ScaleFn 1.0 (cos' >>> morph' scene randomScene)
 
 --    t = 1.0 / toNumber (NE.length scenes * 2)
-    cos' = reMap (vec2 0.0 1.0) (vec2 pi (2.0 * pi)) >>> cos >>> reMap spaceNegPos spacePos
+    cos' = reMap (vec2 0.0 1.0) (vec2 pi (2.0 * pi)) >>> cos >>> reMap (vec2 (-one) one) (vec2 zero one)
     randomScene = Scene $ map (\v -> Triangle v v v) randomField
 
 --------------------------------------------------------------------------------
@@ -410,39 +383,51 @@ render config state =
     renderScene config state
 
 renderScene :: RenderFn
-renderScene config @ (Config { bindings }) state @ (State { pcts, time }) = do
+renderScene config @ (Config { bindings, scenes, randomField }) state @ (State { pcts, time }) = do
     setUniformFloats bindings.uMVMatrix (M.toArray mvMatrix)
 
-    buf <- makeBufferFloat xs
-
+    --buf <- makeBufferFloat (spy xs)
+--    buf <- makeBufferFloat [0.0, 0.0, 0.0,  1.0, 1.0, 0.0,  0.0, 1.0, 0.0]
+    -- buf <- makeBufferFloat [0.8, 0.4629670299649613, 0.0,
+    --                         -0.9919921163140466, -1.2603307013877343, 0.0,
+    --                         2.3346792446737576, 2.06634065960007, 0.0]
+    buf <- makeBufferFloat xsField
     drawArr TRIANGLES buf bindings.aVertexPosition
 
     where
 
+      xsScenes' :: Array Number
+      xsScenes' = do
+        (Scene xs) <- NE.toArray scenes
+        (Triangle p1 p2 p3) <- xs
+        Vec.toArray p1 <> Vec.toArray p2 <> Vec.toArray p3
+
+      xsField = concatMap Vec.toArray randomField
+      
       ScaleFn dur scaleFn = selectScaleFn config state
 
-      velocity = get' d0 pcts
+      velocity = get d0 pcts
 
       t = sin ((time / maxLoopTime) * two * pi)
-          # reMap spaceNegPos spacePos
+          # reMap (vec2 (-one) one) (vec2 zero one)
 
-      t' = get' d1 pcts
+      t' = get d1 pcts
 
-      t'' = (time / ((get' d2 pcts) * maxLoopTime)) % 1.0
+      t'' = (time / (velocity * maxLoopTime)) % 1.0
 
       xs = do
         let (Scene tris) = scaleFn (t'' * dur)
         (Triangle p1 p2 p3) <- tris
         concatMap toArray [ p1, p2, p3 ]
 
-      maxLoopTime = 1000.0 * 1000.0
+      maxLoopTime = 10.0 * 1000.0
 
       getPct offsetPct =
         sin ((time / maxLoopTime * two * pi) + (offsetPct * maxLoopTime))
-          # reMap spacePos spaceNegPos
+          # reMap (vec2 zero one) (vec2 (-one) one)
 
       mvMatrix =
-        M.translate (vec3 zero 0.0 (-20.0)) M.identity
+        M.translate (Vector3.vec3 0.0 0.0 (-20.0)) M.identity
 
 
 renderPerspective :: RenderFn
@@ -450,25 +435,22 @@ renderPerspective (Config { bindings }) (State { size, pcts }) = do
   viewport 0 0 width height
   setUniformFloats bindings.uPMatrix (M.toArray pMatrix)
   where
-    width /\ height = vec2_getTuple size
+    width /\ height = get0 size /\ get1 size
     { zNear, zFar } = staticConfig'
-    aspect = uncurry (/) (map toNumber size # vec2_getTuple)
+    aspect = uncurry (/) (map toNumber size # (\x -> get0 x /\ get1 x))
     pMatrix = M.makePerspective
-              (reMap (vec2 0.0 1.0) (vec2 0.0 360.0) (get' d4 pcts))
-              (reMap (vec2 0.0 1.0) (vec2 0.0 5.0) (get' d5 pcts))
+              45.0 --(reMap (vec2 0.0 1.0) (vec2 0.0 360.0) (get d4 pcts))
+              (toNumber width / toNumber height) --(reMap (vec2 0.0 1.0) (vec2 0.0 5.0) (get d5 pcts))
               zNear
               zFar
 
 renderBackground :: RenderFn
 renderBackground _ (State { pcts }) =
-  let { r, g, b, a } = toRGBA' (graytone (get' d6 pcts)) in
+  let { r, g, b, a } = toRGBA' (graytone (get d6 pcts)) in
   clearColor r g b a
 
 type RenderFn = forall eff a. Config -> State -> EffWebGL eff Unit
 type RenderFn1 = forall eff a. Config -> State -> a -> EffWebGL eff Unit
-
-vec2_getTuple :: forall a . Vec2 a -> Tuple a a
-vec2_getTuple vec = Tuple (get2X vec) (get2Y vec)
 
 --------------------------------------------------------------------------------
 -- DATA
@@ -479,16 +461,16 @@ getScenes = do
   paths <- getIndex dataDir <#> filter predFn
   mapM getScene paths >>= fromArray >>> maybe' (\_ -> fail errMsgEmpty) pure
   where
-    predFn = fileName >>> extension >>> map ((==) objExt) >>> maybe false id
+    predFn = fileName >>> extension >>> map (_ == objExt) >>> maybe false id
     objExt = unsafePartial $ unsafeFromString "obj"
     { dataDir } = staticConfig'
     errMsgEmpty = "no scenes"
 
 getIndex :: forall e . RelDir -> Aff (ajax:: AJAX | e) (Array RelFile)
 getIndex folder =
-  get (printPath' (sandboxAny path))
+  Ajax.get (printPath' (sandboxAny path))
     >>= (_.response >>> parseIndexFile >>> either fail pure)
-    <#> (map ((</>) folder))
+    <#> map (folder </> _)
   where
     path = folder </> indexFile
     indexFile = file (SProxy :: SProxy "index.txt")
@@ -500,7 +482,7 @@ printPath' path = unsafePrintPath posixPrinter path
 parseIndexFile :: String -> Either String (Array RelFile)
 parseIndexFile str =
   split (Pattern "\n") str
-    # filter ((/=) "")
+    # filter (not <<< Str.null)
     # mapM (parseRelFile posixParser)
     # maybe (Left errMsg) Right
   where
@@ -508,7 +490,7 @@ parseIndexFile str =
 
 getScene :: forall e . RelFile -> Aff (ajax:: AJAX | e) Scene
 getScene path = do
-  { response } <- get (printPath' (sandboxAny path))
+  { response } <- Ajax.get (printPath' (sandboxAny path))
   case readWFObj response # parse # runExcept of
     Left err -> fail (show (NEList.head err))
     Right xs -> pure $ Scene xs
@@ -523,70 +505,53 @@ parse val = do
   pure models'
 
   where
-    parseVertices val =
-      readProp "vertices" val >>= readArray >>= mapM parseVertex
+    parseVertices =
+      readProp "vertices" >=> readArray >=> traverse parseVertex
 
 parseModel :: Array Vec3n -> Foreign -> F (Array Triangle)
 parseModel verticesLookup val = do
-  faces <- readProp "faces" val >>= readArray >>= mapM (parseFace verticesLookup)
+  faces <- readProp "faces" val >>= readArray >>= traverse (parseFace verticesLookup)
   pure $ concat faces
 
 parseVertex :: Foreign -> F Vec3n
-parseVertex val = do
-  x <- readProp "x" val >>= readNumber
-  y <- readProp "y" val >>= readNumber
-  z <- readProp "z" val >>= readNumber
-  pure $ vec3 x y z
+parseVertex val =
+  vec3 "x" "y" "z" # traverse (\p -> readProp p val >>= readNumber)
 
 parseFace :: Array Vec3n -> Foreign -> F (Array Triangle)
 parseFace verticesLookup val = do
-  indices <- readProp "vertices" val >>= readArray >>= mapM
-             (\v -> readProp "vertexIndex" v >>= readInt)
+  indices <-
+    readProp "vertices" val
+    >>= readArray
+    >>= traverse (readProp "vertexIndex" >=> readInt)
+
   vertices <-
-    lookup verticesLookup (map (\x -> x - 1) indices)
-    # maybe' (\_ -> fail "lookup error") pure
+    traverse (sub 1 >>> (verticesLookup Arr.!! _)) indices
+    # maybe' (\_ -> fail errLookup) pure
 
-  do
-    a <- index vertices 0
-    b <- index vertices 1
-    c <- index vertices 2
-    d <- index vertices 3
+  triangles <- do
+    a <- vertices Arr.!! 0
+    b <- vertices Arr.!! 1
+    c <- vertices Arr.!! 2
+    d <- vertices Arr.!! 3
+   
+    Just $ [ Triangle a b c, Triangle a c d ]
+    # maybe' (\_ -> fail errTriangle) pure
 
-    Just [ Triangle a b c, Triangle a c d ]
-    # maybe' (\_d -> fail "triangle error") pure
+  pure triangles
 
-lookup :: forall a . Array a -> Array Int -> Maybe (Array a)
-lookup xs indices =
-  let hunde = Tuple xs indices in
-  mapM (index xs) indices
+  where
+      errLookup = "lookup error"
+      errTriangle = "triangle error"
 
 --------------------------------------------------------------------------------
 -- SHORTHANDS
 --------------------------------------------------------------------------------
 
-zero :: Number
-zero = 0.0
-
-onePos :: Number
-onePos = 1.0
-
-one :: Number
-one = onePos
-
 two :: Number
 two = 2.0
 
-oneNeg :: Number
-oneNeg = -1.0
-
-spaceNegPos :: Vec Two Number
-spaceNegPos = vec2 oneNeg onePos
-
-spacePos :: Vec Two Number
-spacePos = vec2 zero onePos
-
-spaceCircle :: Vec Two Number
-spaceCircle = vec2 zero (2.0 * pi)
+spaceCircle :: Vec2n
+spaceCircle = vec2 0.0 (2.0 * pi)
 
 halfPi = pi / 2.0
 
@@ -594,15 +559,14 @@ halfPi = pi / 2.0
 -- UTIL
 --------------------------------------------------------------------------------
 
-reMap :: Pair Number -> Pair Number -> Number -> Number
+reMap :: Vec2n-> Vec2n -> Number -> Number
 reMap pair1 pair2 value =
   pivot2 + (pct * dist2)
   where
-    pivot1 = get2X pair1
-    pivot2 = get2X pair2
-    dist1 = sub' (vec2_getTuple pair1)
-    dist2 = sub' (vec2_getTuple pair2)
-    sub' = uncurry (flip sub)
+    pivot1 = pair1 !! d0
+    pivot2 = pair2 !! d0
+    dist1 = Vec.uncurry2 sub pair1
+    dist2 = Vec.uncurry2 sub pair2
     pct = (value - pivot1) / dist1
 
 section :: forall a b . Int -> Int -> Array a -> Array (Array a)
@@ -627,6 +591,13 @@ mapWithPct f xs =
   where
     n = toNumber (length xs)
 
+f :: StaticConfig -> DynConfig -> Config
+f (StaticConfig x) (DynConfig y) =
+  Config $ mergeRecords x y
+
+mergeRecords :: forall r1 r2 r3. Union r2 r3 r1 => { | r3 } -> { | r2 } -> { | r1 }
+mergeRecords r1 r2 = build (RB.merge r1) r2
+
 --------------------------------------------------------------------------------
 -- FFI
 --------------------------------------------------------------------------------
@@ -643,7 +614,7 @@ class Morph a where
 instance morphNumber :: Morph Number where
   morph pct x y = x + (pct * (y - x))
 
-instance morphVec3 :: Morph a => Morph (Vec Three a) where
+instance morphVec3 :: Morph a => Morph (Vec D3 a) where
   morph pct x y =
     morph pct <$> x <*> y
 
@@ -685,15 +656,8 @@ newtype DynConfig = DynConfig (Record (DynConfigRow ()))
 
 newtype Config = Config (Record (DynConfigRow (StaticConfigRow ())))
 
-f :: StaticConfig -> DynConfig -> Config
-f (StaticConfig x) (DynConfig y) =
-  Config $ mergeRecords x y
-
-mergeRecords :: forall r1 r2 r3. Union r2 r3 r1 => { | r3 } -> { | r2 } -> { | r1 }
-mergeRecords r1 r2 = build (RB.merge r1) r2
-
 newtype State = State
-  { pcts :: Vec' D9 Number
+  { pcts :: Vec D9 Number
   , time :: Number
   , size :: Vec2i
   }
@@ -702,11 +666,13 @@ newtype Scene = Scene (Array Triangle)
 
 data Triangle = Triangle Vec3n Vec3n Vec3n
 
-type Vec3n = Vec3 Number
-type Vec2n = Vec2 Number
+type Vec1i = Vec1 Int
 type Vec2i = Vec2 Int
+type Vec3i = Vec3 Int
 
-type Pair a = Vec2 a
+type Vec1n = Vec1 Number
+type Vec2n = Vec2 Number
+type Vec3n = Vec3 Number
 
 data Sig
   = SigTime Number
@@ -732,349 +698,33 @@ type Bindings =
 type EffRandom eff a = Eff ( random :: RANDOM | eff ) a
 
 --------------------------------------------------------------------------------
--- Vec
+-- VECTOR
 --------------------------------------------------------------------------------
 
-data Nine
-
-instance s9 :: Sized Nine where
-  sized _ = 9
-
-type Vec9 a = Vec Nine a
-
-data IdxNine = IdxNine0 | IdxNine1 | IdxNine2 | IdxNine3 | IdxNine4 | IdxNine5 | IdxNine6 | IdxNine7 | IdxNine8
-
-idxNineArray =
-  [ IdxNine0, IdxNine1, IdxNine2, IdxNine3, IdxNine4, IdxNine5, IdxNine6, IdxNine7, IdxNine8 ]
-
-vec9 :: forall a. a -> a -> a -> a -> a -> a -> a -> a -> a -> Vec9 a
-vec9 a b c d e f g h i = Vec [a, b, c, d, e, f, g, h, i]
-
-idxNineToInt :: IdxNine -> Int
-idxNineToInt idx =
-  case idx of
-    IdxNine0 -> 0
-    IdxNine1 -> 1
-    IdxNine2 -> 2
-    IdxNine3 -> 3
-    IdxNine4 -> 4
-    IdxNine5 -> 5
-    IdxNine6 -> 6
-    IdxNine7 -> 7
-    IdxNine8 -> 8
-
-getNine :: forall a. IdxNine -> Vec9 a -> a
-getNine idx (Vec v) = unsafePartial $ unsafeIndex v (idxNineToInt idx)
-
-setNine :: forall a. IdxNine -> a -> Vec9 a -> Vec9 a
-setNine idx n (Vec v) = Vec (unsafePartial $ fromJust (insertAt (idxNineToInt idx) n v))
-
---------------------------------------------------------------------------------
--- Vec'
---------------------------------------------------------------------------------
-
-newtype Vec' s a = Vec' (Array a)
-
---type SetFn i s a = Nat i => Nat s => Lt i s => a -> Vec' s a -> Vec' s a
-
-{- GENERATE vecs -}
-
--- Constructors
-
-vec0' :: forall a. Vec' D0 a
-vec0' = Vec' [ ]
-
-vec1' :: forall a. a -> Vec' D1 a
-vec1' x0 = Vec' [ x0 ]
-
-vec2' :: forall a. a -> a -> Vec' D2 a
-vec2' x0 x1 = Vec' [ x0, x1 ]
-
-vec3' :: forall a. a -> a -> a -> Vec' D3 a
-vec3' x0 x1 x2 = Vec' [ x0, x1, x2 ]
-
-vec4' :: forall a. a -> a -> a -> a -> Vec' D4 a
-vec4' x0 x1 x2 x3 = Vec' [ x0, x1, x2, x3 ]
-
-vec5' :: forall a. a -> a -> a -> a -> a -> Vec' D5 a
-vec5' x0 x1 x2 x3 x4 = Vec' [ x0, x1, x2, x3, x4 ]
-
-vec6' :: forall a. a -> a -> a -> a -> a -> a -> Vec' D6 a
-vec6' x0 x1 x2 x3 x4 x5 = Vec' [ x0, x1, x2, x3, x4, x5 ]
-
-vec7' :: forall a. a -> a -> a -> a -> a -> a -> a -> Vec' D7 a
-vec7' x0 x1 x2 x3 x4 x5 x6 = Vec' [ x0, x1, x2, x3, x4, x5, x6 ]
-
-vec8' :: forall a. a -> a -> a -> a -> a -> a -> a -> a -> Vec' D8 a
-vec8' x0 x1 x2 x3 x4 x5 x6 x7 = Vec' [ x0, x1, x2, x3, x4, x5, x6, x7 ]
-
-vec9' :: forall a. a -> a -> a -> a -> a -> a -> a -> a -> a -> Vec' D9 a
-vec9' x0 x1 x2 x3 x4 x5 x6 x7 x8 = Vec' [ x0, x1, x2, x3, x4, x5, x6, x7, x8 ]
-
--- Getters by Index
-
-get0' :: forall s a. Nat s => Lt D0 s => Vec' s a -> a
-get0' = get' d0
-
-get1' :: forall s a. Nat s => Lt D1 s => Vec' s a -> a
-get1' = get' d1
-
-get2' :: forall s a. Nat s => Lt D2 s => Vec' s a -> a
-get2' = get' d2
-
-get3' :: forall s a. Nat s => Lt D3 s => Vec' s a -> a
-get3' = get' d3
-
-get4' :: forall s a. Nat s => Lt D4 s => Vec' s a -> a
-get4' = get' d4
-
-get5' :: forall s a. Nat s => Lt D5 s => Vec' s a -> a
-get5' = get' d5
-
-get6' :: forall s a. Nat s => Lt D6 s => Vec' s a -> a
-get6' = get' d6
-
-get7' :: forall s a. Nat s => Lt D7 s => Vec' s a -> a
-get7' = get' d7
-
-get8' :: forall s a. Nat s => Lt D8 s => Vec' s a -> a
-get8' = get' d8
-
-get9' :: forall s a. Nat s => Lt D9 s => Vec' s a -> a
-get9' = get' d9
-
--- Getters by XYZW
-
-getX' :: forall s a. Nat s => Lt D0 s => Vec' s a -> a
-getX' = get' d0
-
-getY' :: forall s a. Nat s => Lt D1 s => Vec' s a -> a
-getY' = get' d1
-
-getZ' :: forall s a. Nat s => Lt D2 s => Vec' s a -> a
-getZ' = get' d2
-
-getW' :: forall s a. Nat s => Lt D3 s => Vec' s a -> a
-getW' = get' d3
-
--- Getters by RGBA
-
-getR' :: forall s a. Nat s => Lt D0 s => Vec' s a -> a
-getR' = get' d0
-
-getG' :: forall s a. Nat s => Lt D1 s => Vec' s a -> a
-getG' = get' d1
-
-getB' :: forall s a. Nat s => Lt D2 s => Vec' s a -> a
-getB' = get' d2
-
-getA' :: forall s a. Nat s => Lt D3 s => Vec' s a -> a
-getA' = get' d3
-
--- Setters by Index
-
-set0' :: forall s a.
-  Nat s => Lt D0 s => a -> Vec' s a -> Vec' s a
-set0' = set' d0
-
-set1' :: forall s a.
-  Nat s => Lt D1 s => a -> Vec' s a -> Vec' s a
-set1' = set' d1
-
-set2' :: forall s a.
-  Nat s => Lt D2 s => a -> Vec' s a -> Vec' s a
-set2' = set' d2
-
-set3' :: forall s a.
-  Nat s => Lt D3 s => a -> Vec' s a -> Vec' s a
-set3' = set' d3
-
-set4' :: forall s a.
-  Nat s => Lt D4 s => a -> Vec' s a -> Vec' s a
-set4' = set' d4
-
-set5' :: forall s a.
-  Nat s => Lt D5 s => a -> Vec' s a -> Vec' s a
-set5' = set' d5
-
-set6' :: forall s a.
-  Nat s => Lt D6 s => a -> Vec' s a -> Vec' s a
-set6' = set' d6
-
-set7' :: forall s a.
-  Nat s => Lt D7 s => a -> Vec' s a -> Vec' s a
-set7' = set' d7
-
-set8' :: forall s a.
-  Nat s => Lt D8 s => a -> Vec' s a -> Vec' s a
-set8' = set' d8
-
-set9' :: forall s a.
-  Nat s => Lt D9 s => a -> Vec' s a -> Vec' s a
-set9' = set' d9
-
--- Setters by XYZW
-
-setX' :: forall s a.
-  Nat s => Lt D0 s => a -> Vec' s a -> Vec' s a
-setX' = set' d0
-
-setY' :: forall s a.
-  Nat s => Lt D1 s => a -> Vec' s a -> Vec' s a
-setY' = set' d1
-
-setZ' :: forall s a.
-  Nat s => Lt D2 s => a -> Vec' s a -> Vec' s a
-setZ' = set' d2
-
-setW' :: forall s a.
-  Nat s => Lt D3 s => a -> Vec' s a -> Vec' s a
-setW' = set' d3
-
--- Setters by RGBA
-
-setR' :: forall s a.
-  Nat s => Lt D0 s => a -> Vec' s a -> Vec' s a
-setR' = set' d0
-
-setG' :: forall s a.
-  Nat s => Lt D1 s => a -> Vec' s a -> Vec' s a
-setG' = set' d1
-
-setB' :: forall s a.
-  Nat s => Lt D2 s => a -> Vec' s a -> Vec' s a
-setB' = set' d2
-
-setA' :: forall s a.
-  Nat s => Lt D3 s => a -> Vec' s a -> Vec' s a
-setA' = set' d3
-
--- Overs by Index
-
-over0' :: forall s a.
-  Nat s => Lt D0 s => (a -> a) -> Vec' s a -> Vec' s a
-over0' = over' d0
-
-over1' :: forall s a.
-  Nat s => Lt D1 s => (a -> a) -> Vec' s a -> Vec' s a
-over1' = over' d1
-
-over2' :: forall s a.
-  Nat s => Lt D2 s => (a -> a) -> Vec' s a -> Vec' s a
-over2' = over' d2
-
-over3' :: forall s a.
-  Nat s => Lt D3 s => (a -> a) -> Vec' s a -> Vec' s a
-over3' = over' d3
-
-over4' :: forall s a.
-  Nat s => Lt D4 s => (a -> a) -> Vec' s a -> Vec' s a
-over4' = over' d4
-
-over5' :: forall s a.
-  Nat s => Lt D5 s => (a -> a) -> Vec' s a -> Vec' s a
-over5' = over' d5
-
-over6' :: forall s a.
-  Nat s => Lt D6 s => (a -> a) -> Vec' s a -> Vec' s a
-over6' = over' d6
-
-over7' :: forall s a.
-  Nat s => Lt D7 s => (a -> a) -> Vec' s a -> Vec' s a
-over7' = over' d7
-
-over8' :: forall s a.
-  Nat s => Lt D8 s => (a -> a) -> Vec' s a -> Vec' s a
-over8' = over' d8
-
-over9' :: forall s a.
-  Nat s => Lt D9 s => (a -> a) -> Vec' s a -> Vec' s a
-over9' = over' d9
-
--- Overs by XYZW
-
-overX' :: forall s a.
-  Nat s => Lt D0 s => (a -> a) -> Vec' s a -> Vec' s a
-overX' = over' d0
-
-overY' :: forall s a.
-  Nat s => Lt D1 s => (a -> a) -> Vec' s a -> Vec' s a
-overY' = over' d1
-
-overZ' :: forall s a.
-  Nat s => Lt D2 s => (a -> a) -> Vec' s a -> Vec' s a
-overZ' = over' d2
-
-overW' :: forall s a.
-  Nat s => Lt D3 s => (a -> a) -> Vec' s a -> Vec' s a
-overW' = over' d3
-
--- Overs by RGBA
-
-overR' :: forall s a.
-  Nat s => Lt D0 s => (a -> a) -> Vec' s a -> Vec' s a
-overR' = over' d0
-
-overG' :: forall s a.
-  Nat s => Lt D1 s => (a -> a) -> Vec' s a -> Vec' s a
-overG' = over' d1
-
-overB' :: forall s a.
-  Nat s => Lt D2 s => (a -> a) -> Vec' s a -> Vec' s a
-overB' = over' d2
-
-overA' :: forall s a.
-  Nat s => Lt D3 s => (a -> a) -> Vec' s a -> Vec' s a
-overA' = over' d3
-
-{- GENERATE END -}
-
-get' :: forall i s a. Nat i => Nat s => Lt i s => i -> Vec' s a -> a
-get' i (Vec' xs) = unsafePartial $ unsafeIndex xs (toInt i)
-
-set' :: forall i s a. Nat i => Nat s => Lt i s => i -> a -> Vec' s a -> Vec' s a
-set' i val (Vec' xs) = Vec' (unsafePartial $ fromJust (insertAt (toInt i) val xs))
-
-over' :: forall i s a. Nat i => Nat s => Lt i s => i -> (a -> a) -> Vec' s a -> Vec' s a
-over' i f (Vec' xs) = Vec' (unsafePartial $ fromJust (modifyAt (toInt i) f xs))
-
-derive instance genericVec' :: Generic (Vec' s a) _
-
-instance showVec' :: Show a => Show (Vec' s a) where
-  show = genericShow
-
-instance eqVec' :: Eq a => Eq (Vec' s a) where
-  eq = genericEq
-
-instance ordVec' :: Ord a => Ord (Vec' s a) where
-  compare = genericCompare
-
--- keep?
-instance semigroupVec' :: Semigroup (Vec' s a) where
-  append = genericAppend
-
--- keep?
-instance monoidVec' :: Monoid (Vec' s a) where
-  mempty = genericMempty
-
-instance functorVec' :: Functor (Vec' s) where
-  map f (Vec' xs) = Vec' $ map f xs
-
-instance applyVec' :: Apply (Vec' s) where
-  apply (Vec' fs) (Vec' xs) = Vec' (zipWith ($) fs xs)
-
-instance foldableVec' :: Foldable (Vec' s) where
-  foldr f m (Vec' xs) = foldr f m xs
-  foldl f m (Vec' xs) = foldl f m xs
-  foldMap f xs = foldr (\x acc -> f x <> acc) mempty xs
-
-appendVecs :: forall s1 s2 s3 a.
-  Nat s1 => Nat s2 => Add s1 s2 s3 => Vec' s1 a -> Vec' s2 a -> Vec' s3 a
-appendVecs (Vec' xs) (Vec' ys) = Vec' (xs <> ys)
-
-replicateVec :: forall s a. Nat s => s -> a -> Vec' s a
-replicateVec n x = Vec' (replicate (toInt n) x)
+getX = flip Vec.index d0
+getY = flip Vec.index d1
+getZ = flip Vec.index d2
+
+get0 = flip Vec.index d0
+get1 = flip Vec.index d1
+get2 = flip Vec.index d2
+
+set0 = Vec.updateAt d0
+set1 = Vec.updateAt d1
+set2 = Vec.updateAt d2
+
+get = flip Vec.index
 
 --------------------------------------------------------------------------------
 -- TEST
 --------------------------------------------------------------------------------
+
+-- instance semiringVec :: (Nat s, Semiring a) => Semiring (Vec s a) where
+--   add = lift2 add
+--   mul = lift2 mul
+--   zero = replicate (toInt (Proxy :: Proxy s) - 1) zero
+--   one = replicate (toInt (Proxy :: Proxy s) - 1) one
+
+-- instance natProxy :: Nat (Proxy a) where
+--   toInt x = 3
+

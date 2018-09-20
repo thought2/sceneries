@@ -1,0 +1,23 @@
+{
+  "name": "src-gen",
+  "ignore": [
+    "**/.*",
+    "node_modules",
+    "bower_components",
+    "output"
+  ],
+  "dependencies": {
+    "purescript-prelude": "3.3.0",
+    "purescript-console": "3.0.0",
+    "purescript-either": "^3.2.0",
+    "purescript-strings": "^3.5.0",
+    "purescript-node-fs": "^4.0.1",
+    "purescript-node-process": "^5.0.0",
+    "purescript-extensions": "^2.3.8",
+    "purescript-node-path": "2.0.0",
+    "purescript-test-unit": "^13.0.0"
+  },
+  "devDependencies": {
+    "purescript-psci-support": "3.0.0"
+  }
+}

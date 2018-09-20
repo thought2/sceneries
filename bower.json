@@ -33,12 +33,12 @@
     "purescript-random": "^3.0.0",
     "purescript-extensions": "^2.3.8",
     "purescript-console": "^3.0.0",
-    "purescript-matrix": "^2.1.0",
-    "purescript-vector": "^2.0.0",
     "purescript-typedarray": "^2.1.0",
     "purescript-affjax": "^4.0.0",
     "purescript-numbers": "^5.0.0",
-    "purescript-prelude": "^3.3.0"
+    "purescript-prelude": "^3.3.0",
+    "purescript-sized-vectors": "^2.2.0",
+    "purescript-pairs": "^5.0.0"
   },
   "resolutions": {
     "purescript-extensions": "^2.2.0",
