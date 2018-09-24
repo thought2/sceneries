@@ -1,6 +1,6 @@
 module Main where
 
-import Color (Color, fromInt, graytone, toRGBA')
+import Color (Color, graytone, toRGBA')
 import Control.Apply (lift2)
 import Control.Monad.Aff (Aff, Canceler, launchAff, makeAff)
 import Control.Monad.Eff (Eff, kind Effect)
@@ -12,52 +12,46 @@ import Control.Monad.Eff.Timer (TIMER)
 import Control.Monad.Eff.Unsafe (unsafeCoerceEff)
 import Control.Monad.Except (runExcept)
 import DOM (DOM)
-import Data.Array (concat, concatMap, drop, filter, foldr, index, insertAt, length, mapWithIndex, modifyAt, range, snoc, take, unsafeIndex, zipWith)
+import Data.Array (concatMap, drop, filter, foldr, length, mapWithIndex, range, snoc, take, zipWith)
 import Data.Array as Arr
 import Data.Array.NonEmpty (NonEmptyArray, fromArray)
 import Data.Array.NonEmpty as NE
 import Data.Char (fromCharCode, toCharCode)
-import Data.Either (Either(Right, Left), either)
-import Data.Eq (class Eq, (/=))
-import Data.Foldable (class Foldable, foldl)
-import Data.Foreign (F, Foreign, readArray, readInt, readNumber)
-import Data.Foreign.Index (readProp)
+import Data.Either (Either, either, note)
+import Data.Foreign (Foreign)
+import Data.Foreign.Class (decode)
 import Data.Generic.Rep (class Generic)
-import Data.Generic.Rep.Eq (genericEq)
-import Data.Generic.Rep.Ord (genericCompare)
 import Data.Generic.Rep.Show (genericShow)
 import Data.Int (toNumber)
 import Data.List.NonEmpty as NEList
 import Data.Matrix (toArray) as M
 import Data.Matrix4 (identity, makePerspective, translate) as M
-import Data.Maybe (Maybe(..), fromJust, maybe, maybe')
+import Data.Maybe (Maybe(Just, Nothing), fromJust, fromMaybe, maybe')
 import Data.Midi (Event(..), TimedEvent(..))
 import Data.Midi.WebMidi (createEventChannel)
-import Data.Monoid (mempty)
+import Data.Newtype (class Newtype, unwrap)
 import Data.Ord (between)
-import Data.Pair (Pair(Pair), (~))
 import Data.Record.Builder (build)
 import Data.Record.Builder as RB
+import Data.Ring (class Ring)
 import Data.Semigroup.Foldable (foldMap1)
 import Data.String (Pattern(..), split)
 import Data.String as Str
 import Data.String.NonEmpty (unsafeFromString)
 import Data.Symbol (SProxy(..))
 import Data.Traversable (traverse)
-import Data.Tuple (Tuple(..), uncurry)
-import Data.Tuple.Nested (Tuple1, Tuple2, Tuple4, Tuple3, tuple2, tuple3, tuple4, (/\))
-import Data.TypeNat (class Sized)
-import Data.Typelevel.Num (class Add, class Lt, class Nat, D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9, reifyInt, toInt)
-import Data.Typelevel.Num (class Lt, class Nat, D0, D1, D2, D3, D4, D5, D6, D7, D8, D9, d0, d1, d2, d3, d4, d5, d6, d7, d8, d9)
-import Data.Typelevel.Undefined (undefined)
-import Data.Unfoldable (class Unfoldable, replicate, unfoldr)
-import Data.Vec (Vec, cons, empty, replicate', toArray, (!!), (+>))
-import Data.Vec as Vec
+import Data.TraversableWithIndex (traverseWithIndex)
+import Data.Tuple (Tuple)
+import Data.Tuple as Tuple
+import Data.Tuple.Nested ((/\))
+import Data.Typelevel.Num (class Nat, D3, D9, d0, d1, d2, d3, d4, d5, d6, d7, d8)
+import Data.Vec (Vec, replicate', toArray, (!!))
+import Data.Vec (index, snoc, toArray, updateAt) as Vec
 import Data.Vec.Extra (Vec1, Vec2, Vec3, vec2, vec3)
-import Data.Vec.Extra as Vec
+import Data.Vec.Extra (uncurry2) as Vec
 import Data.Vector3 as Vector3
 import Debug.Trace (spy)
-import Extensions (fail, mapM, replicateM)
+import Extensions (fail, mapM)
 import Graphics.WebGLAll (Attribute, Capacity(DEPTH_TEST), EffWebGL, Mask(DEPTH_BUFFER_BIT, COLOR_BUFFER_BIT), Mat4, Mode(TRIANGLES), Shaders(Shaders), Uniform, WebGLContext, WebGLProg, WebGl, clear, clearColor, drawArr, enable, getCanvasHeight, getCanvasWidth, makeBufferFloat, runWebGL, setUniformFloats, viewport, withShaders)
 import Graphics.WebGLAll as Gl
 import Math (cos, pi, sin, (%))
@@ -65,12 +59,12 @@ import Network.HTTP.Affjax (AJAX)
 import Network.HTTP.Affjax as Ajax
 import Partial.Unsafe (unsafePartial)
 import Pathy (class IsDirOrFile, class IsRelOrAbs, Dir, Path, Rel, RelDir, RelFile, SandboxedPath, dir, extension, file, fileName, parseRelFile, posixParser, posixPrinter, sandboxAny, unsafePrintPath, (</>))
-import Prelude (class Apply, class Functor, class Ord, class Semigroup, class Semiring, class Show, Unit, add, bind, const, discard, flip, id, map, max, mul, negate, not, one, otherwise, pure, show, sub, unit, zero, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>=>), (>>=), (>>>))
+import Prelude (class Functor, class Semigroup, class Show, Unit, bind, const, discard, flip, id, map, max, negate, not, one, otherwise, pure, show, sub, unit, zero, (#), ($), (*), (+), (-), (/), (<), (<#>), (<$>), (<*>), (<<<), (<>), (==), (>>=), (>>>))
 import Signal (Signal, filterMap, foldp, map2, merge, mergeMany, runSignal, (~>))
 import Signal.Channel (CHANNEL, subscribe)
 import Signal.DOM (DimensionPair, CoordinatePair, animationFrame, keyPressed, mousePos, windowDimensions)
 import Signal.Time (Time)
-import Type.Prelude (Proxy(..))
+import WFObjFormat as WFO
 
 --------------------------------------------------------------------------------
 -- SHADERS
@@ -173,13 +167,13 @@ runWebGLAff arg =
 mainFrp config = do
   sigTime <- animationFrame <#> map SigTime
   sigSize <- windowDimensions <#> map SigSize
-  sigInput1 <- keyboardMouseInput <#> map SigInput
-  sigInput2 <- midiInput <#> map SigInput
+  sigInputKeyboardMouse <- keyboardMouseInput <#> map SigInput
+  sigInputMidi <- midiInput <#> map SigInput
 
-  let signals = sigTime <> sigSize <> sigInput1 <> sigInput2
+  let signals = sigTime <> sigSize <> sigInputKeyboardMouse <> sigInputMidi
       sigState = foldp update (initState config) signals
 
-  _ <- debug config signals sigState
+  debug config signals sigState
   runSignal (sigState ~> (\state -> render config state))
 
 keysPressed :: forall eff. Eff ( dom :: DOM | eff) (Signal Key)
@@ -226,7 +220,7 @@ midiInput = do
     f (TimedEvent { event : (Just (ControlChange _ n pct)) })
       | between 14 22 n = Just $ Input (n - 14) (reMap' pct)
     f _ = Nothing
-    reMap' n = reMap (vec2 zero 127.0) (vec2 zero one) (toNumber n)
+    reMap' n = reMap (vec2 zero 127.0) spaceUnit (toNumber n)
 
 keyToInt :: Key -> Int
 keyToInt key = case key of
@@ -263,7 +257,7 @@ getDynConfig canvasContext = do
   scenes <- getScenes
   bindings <- withShadersAff shaders
   liftEff $ do
-    let n = map (\(Scene s) -> length s) scenes # foldr max 0
+    let n = map (length <<< unwrap) scenes # foldr max 0
     size <- getCanvasSize canvasContext
     randomField <- range 0 n # mapM (const randVec3)
     pure $ DynConfig
@@ -272,10 +266,10 @@ getDynConfig canvasContext = do
       , size
       , bindings
       }
-    where
-      { fieldZ } = staticConfig'
-      randVec2 = randomVec <#> map (reMap (vec2 zero one) (vec2 (-one) one))
-      randVec3 = Vec.snoc <$> pure fieldZ <*> randVec2
+  where
+    { fieldZ } = staticConfig'
+    randVec2 = randomVec <#> map (reMap spaceUnit spaceUnitSigned)
+    randVec3 = lift2 Vec.snoc (pure fieldZ) randVec2
 
 getCanvasSize :: forall eff. WebGLContext -> Eff ( webgl :: WebGl | eff ) Vec2i
 getCanvasSize ctx =
@@ -323,7 +317,7 @@ update sig state@(State st) =
 
     SigSize { w, h } ->
       State $ st { size = vec2 w h }
-    
+
     SigInput (Input 0 pct) -> State $ st { pcts = Vec.updateAt d0 pct st.pcts }
     SigInput (Input 1 pct) -> State $ st { pcts = Vec.updateAt d1 pct st.pcts }
     SigInput (Input 2 pct) -> State $ st { pcts = Vec.updateAt d2 pct st.pcts }
@@ -349,7 +343,7 @@ selectScaleFn (Config { scenes, randomField }) state =
       ScaleFn 1.0 (cos' >>> morph' scene randomScene)
 
 --    t = 1.0 / toNumber (NE.length scenes * 2)
-    cos' = reMap (vec2 0.0 1.0) (vec2 pi (2.0 * pi)) >>> cos >>> reMap (vec2 (-one) one) (vec2 zero one)
+    cos' = reMap spaceUnit (vec2 pi (two * pi)) >>> cos >>> reMap spaceUnitSigned spaceUnit
     randomScene = Scene $ map (\v -> Triangle v v v) randomField
 
 --------------------------------------------------------------------------------
@@ -391,7 +385,7 @@ renderScene config @ (Config { bindings, scenes, randomField }) state @ (State {
     -- buf <- makeBufferFloat [0.8, 0.4629670299649613, 0.0,
     --                         -0.9919921163140466, -1.2603307013877343, 0.0,
     --                         2.3346792446737576, 2.06634065960007, 0.0]
-    buf <- makeBufferFloat xsField
+    buf <- makeBufferFloat xsScenes'
     drawArr TRIANGLES buf bindings.aVertexPosition
 
     where
@@ -403,13 +397,13 @@ renderScene config @ (Config { bindings, scenes, randomField }) state @ (State {
         Vec.toArray p1 <> Vec.toArray p2 <> Vec.toArray p3
 
       xsField = concatMap Vec.toArray randomField
-      
+
       ScaleFn dur scaleFn = selectScaleFn config state
 
       velocity = get d0 pcts
 
       t = sin ((time / maxLoopTime) * two * pi)
-          # reMap (vec2 (-one) one) (vec2 zero one)
+          # reMap spaceUnitSigned spaceUnit
 
       t' = get d1 pcts
 
@@ -424,7 +418,7 @@ renderScene config @ (Config { bindings, scenes, randomField }) state @ (State {
 
       getPct offsetPct =
         sin ((time / maxLoopTime * two * pi) + (offsetPct * maxLoopTime))
-          # reMap (vec2 zero one) (vec2 (-one) one)
+          # reMap spaceUnit spaceUnitSigned
 
       mvMatrix =
         M.translate (Vector3.vec3 0.0 0.0 (-20.0)) M.identity
@@ -432,116 +426,137 @@ renderScene config @ (Config { bindings, scenes, randomField }) state @ (State {
 
 renderPerspective :: RenderFn
 renderPerspective (Config { bindings }) (State { size, pcts }) = do
-  viewport 0 0 width height
+  viewport 0 0 (size !! d0) (size !! d1)
   setUniformFloats bindings.uPMatrix (M.toArray pMatrix)
   where
-    width /\ height = get0 size /\ get1 size
     { zNear, zFar } = staticConfig'
-    aspect = uncurry (/) (map toNumber size # (\x -> get0 x /\ get1 x))
+    aspect = Vec.uncurry2 (/) (map toNumber size)
     pMatrix = M.makePerspective
               45.0 --(reMap (vec2 0.0 1.0) (vec2 0.0 360.0) (get d4 pcts))
-              (toNumber width / toNumber height) --(reMap (vec2 0.0 1.0) (vec2 0.0 5.0) (get d5 pcts))
+              aspect --(reMap (vec2 0.0 1.0) (vec2 0.0 5.0) (get d5 pcts))
               zNear
               zFar
 
 renderBackground :: RenderFn
 renderBackground _ (State { pcts }) =
-  let { r, g, b, a } = toRGBA' (graytone (get d6 pcts)) in
+  let { r, g, b, a } = toRGBA' (graytone (pcts !! d6)) in
   clearColor r g b a
 
 type RenderFn = forall eff a. Config -> State -> EffWebGL eff Unit
 type RenderFn1 = forall eff a. Config -> State -> a -> EffWebGL eff Unit
 
 --------------------------------------------------------------------------------
--- DATA
+-- DATA GET
 --------------------------------------------------------------------------------
+
+data ErrGet = ErrGetIndex
+
+errorsGet = { noScenes: "no scenes" }
 
 getScenes :: forall e . Aff (ajax:: AJAX | e) (NonEmptyArray Scene)
 getScenes = do
   paths <- getIndex dataDir <#> filter predFn
-  mapM getScene paths >>= fromArray >>> maybe' (\_ -> fail errMsgEmpty) pure
+  mapM getScene paths >>= fromArray >>> maybe' (\_ -> fail errorsGet.noScenes) pure
   where
-    predFn = fileName >>> extension >>> map (_ == objExt) >>> maybe false id
-    objExt = unsafePartial $ unsafeFromString "obj"
-    { dataDir } = staticConfig'
-    errMsgEmpty = "no scenes"
+      predFn = fileName >>> extension >>> map (_ == objExt) >>> fromMaybe false
+      objExt = unsafePartial $ unsafeFromString "obj"
+      { dataDir } = staticConfig'
 
 getIndex :: forall e . RelDir -> Aff (ajax:: AJAX | e) (Array RelFile)
 getIndex folder =
   Ajax.get (printPath' (sandboxAny path))
-    >>= (_.response >>> parseIndexFile >>> either fail pure)
-    <#> map (folder </> _)
+  >>= (_.response >>> parseIndexFile >>> either fail pure)
+  <#> map (folder </> _)
   where
-    path = folder </> indexFile
-    indexFile = file (SProxy :: SProxy "index.txt")
+      path = folder </> indexFile
+      indexFile = file (SProxy :: SProxy "index.txt")
 
-printPath' :: forall a b.
-  IsRelOrAbs a => IsDirOrFile b => SandboxedPath a b -> String
-printPath' path = unsafePrintPath posixPrinter path
+getScene :: forall e . RelFile -> Aff (ajax:: AJAX | e) Scene
+getScene path =
+  Ajax.get (printPath' $ sandboxAny path)
+  >>= ( _.response
+        >>> readWFObj
+        >>> decode
+        >>> runExcept
+        >>> either
+              (fail <<< show <<< NEList.head)
+              pure
+      )
+  >>= ( parseWFOMain_
+        >>> either (fail <<< (\x -> "here" <> x) <<< show) (\(File x) -> pure $ Scene $ f x)
+      )
+
+  where
+    f models = do
+      (Model m) <- models
+      (Face tris) <- m
+      tris
+
+
+--------------------------------------------------------------------------------
+-- DATA PARSE
+--------------------------------------------------------------------------------
+
+newtype File = File (Array Model)
+
+newtype Model = Model (Array Face)
+
+newtype Face = Face (Array Triangle)
+
+spy' s x = spy (s /\ x) # Tuple.snd
+
+parseWFOMain_ :: WFO.Main -> Either ErrParse File
+parseWFOMain_ (WFO.Main { models }) =
+  File <$> traverse (parseWFOModel_ verticesLookup) models
+  where
+    verticesLookup = models
+      >>= (unwrap >>> _.vertices)
+      >>= (parseWFOVertex_ >>> pure)
+
+parseWFOVertex_ :: WFO.Vertex -> Vec3n
+parseWFOVertex_ (WFO.Vertex { x, y, z }) = vec3 x y z
+
+parseWFOModel_ :: Array Vec3n -> WFO.Model -> Either ErrParse Model
+parseWFOModel_ verticesLookup (WFO.Model { vertices, faces }) =
+  Model <$> traverseWithIndex (\i -> parseWFOFace_ i verticesLookup) faces
+
+parseWFOFace_ :: Int -> Array Vec3n -> WFO.Face -> Either ErrParse Face
+parseWFOFace_ i verticesLookup (WFO.Face { vertices }) =
+  note (ErrParseTriangle verticesLookup vertices i) $ do
+  vertices' <- (traverse (\i -> verticesLookup Arr.!! (i - 1)) indices ) :: Maybe (Array Vec3n)
+
+  a <- vertices' Arr.!! 0
+  b <- vertices' Arr.!! 1
+  c <- vertices' Arr.!! 2
+  d <- vertices' Arr.!! 3
+
+  Just $ Face [ Triangle a b c, Triangle a c d ]
+
+  where
+    indices = map (unwrap >>> _.vertexIndex) vertices
 
 parseIndexFile :: String -> Either String (Array RelFile)
 parseIndexFile str =
   split (Pattern "\n") str
-    # filter (not <<< Str.null)
-    # mapM (parseRelFile posixParser)
-    # maybe (Left errMsg) Right
+  # filter (not <<< Str.null)
+  # traverse (parseRelFile posixParser)
+  # note errMsg
   where
     errMsg = "Invalid index file"
 
-getScene :: forall e . RelFile -> Aff (ajax:: AJAX | e) Scene
-getScene path = do
-  { response } <- Ajax.get (printPath' (sandboxAny path))
-  case readWFObj response # parse # runExcept of
-    Left err -> fail (show (NEList.head err))
-    Right xs -> pure $ Scene xs
+data ErrParse
+  = ErrParseLookup
+  | ErrParseTriangle (Array Vec3n) (Array WFO.VertexRef) Int
 
-parse :: Foreign -> F (Array Triangle)
-parse val = do
-  models <- readProp "models" val >>= readArray
-  verticesLookup <-
-    mapM parseVertices models <#> concat
-  models' <-
-    mapM (parseModel verticesLookup) models <#> concat
-  pure models'
+-- data DebugSeg = DSFile String | DSModel Int | DSFace Int | DSVertex Int
+-- data DebugPath = Array DebugSeg
 
-  where
-    parseVertices =
-      readProp "vertices" >=> readArray >=> traverse parseVertex
+-- data E = E DebugPath Err
 
-parseModel :: Array Vec3n -> Foreign -> F (Array Triangle)
-parseModel verticesLookup val = do
-  faces <- readProp "faces" val >>= readArray >>= traverse (parseFace verticesLookup)
-  pure $ concat faces
+derive instance genericErrParse :: Generic ErrParse _
 
-parseVertex :: Foreign -> F Vec3n
-parseVertex val =
-  vec3 "x" "y" "z" # traverse (\p -> readProp p val >>= readNumber)
-
-parseFace :: Array Vec3n -> Foreign -> F (Array Triangle)
-parseFace verticesLookup val = do
-  indices <-
-    readProp "vertices" val
-    >>= readArray
-    >>= traverse (readProp "vertexIndex" >=> readInt)
-
-  vertices <-
-    traverse (sub 1 >>> (verticesLookup Arr.!! _)) indices
-    # maybe' (\_ -> fail errLookup) pure
-
-  triangles <- do
-    a <- vertices Arr.!! 0
-    b <- vertices Arr.!! 1
-    c <- vertices Arr.!! 2
-    d <- vertices Arr.!! 3
-   
-    Just $ [ Triangle a b c, Triangle a c d ]
-    # maybe' (\_ -> fail errTriangle) pure
-
-  pure triangles
-
-  where
-      errLookup = "lookup error"
-      errTriangle = "triangle error"
+instance showErrParse :: Show ErrParse where
+  show = genericShow
 
 --------------------------------------------------------------------------------
 -- SHORTHANDS
@@ -551,13 +566,21 @@ two :: Number
 two = 2.0
 
 spaceCircle :: Vec2n
-spaceCircle = vec2 0.0 (2.0 * pi)
+spaceCircle = vec2 zero (two * pi)
 
-halfPi = pi / 2.0
+spaceUnit :: forall a. Ring a => Vec2 a
+spaceUnit = vec2 zero one
+
+spaceUnitSigned :: forall a. Ring a => Vec2 a
+spaceUnitSigned = vec2 (-one) one
 
 --------------------------------------------------------------------------------
 -- UTIL
 --------------------------------------------------------------------------------
+
+printPath' :: forall a b.
+  IsRelOrAbs a => IsDirOrFile b => SandboxedPath a b -> String
+printPath' path = unsafePrintPath posixPrinter path
 
 reMap :: Vec2n-> Vec2n -> Number -> Number
 reMap pair1 pair2 value =
@@ -656,15 +679,21 @@ newtype DynConfig = DynConfig (Record (DynConfigRow ()))
 
 newtype Config = Config (Record (DynConfigRow (StaticConfigRow ())))
 
+derive instance newtypeConfig :: Newtype Config _
+
 newtype State = State
   { pcts :: Vec D9 Number
   , time :: Number
   , size :: Vec2i
   }
-  
+
 newtype Scene = Scene (Array Triangle)
 
+derive instance newtypeScene :: Newtype Scene _
+
 data Triangle = Triangle Vec3n Vec3n Vec3n
+newtype Triangle' = Triangle' (Vec3 Vec3n)
+
 
 type Vec1i = Vec1 Int
 type Vec2i = Vec2 Int
@@ -727,4 +756,3 @@ get = flip Vec.index
 
 -- instance natProxy :: Nat (Proxy a) where
 --   toInt x = 3
-

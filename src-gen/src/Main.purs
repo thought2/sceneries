@@ -1,19 +1,18 @@
 module Main where
 
+
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Console (CONSOLE)
 import Control.Monad.Eff.Exception (EXCEPTION)
-import Data.Array (concat, mapWithIndex, null, range, replicate, (:))
-import Data.Foldable (foldr, surround)
-import Data.Map (Map, fromFoldable)
+import Data.Array (null, range, replicate)
+import Data.Map (fromFoldable)
 import Data.Monoid (mempty)
 import Data.Semigroup (class Semigroup)
-import Data.StrMap (insert)
 import Data.String (joinWith)
 import Data.Tuple.Nested ((/\))
 import Node.FS (FS)
 import Node.Process (PROCESS)
-import Prelude (Unit, map, show, (#), ($), (-), (<>), (==))
+import Prelude (Unit, map, show, (#), ($), (-), (<>), (==), (>>>))
 import PursGen (mustache, replaceGens)
 
 --------------------------------------------------------------------------------
@@ -90,6 +89,37 @@ gen_Vec i = mustache replacements
   where
     replacements = fromFoldable [ "i" /\ show i ]
 
+gen_show :: String -> String
+gen_show name = mustache replacements $ joinWith "\n" $
+  [ "instance show{{name}} :: Show {{name}} where"
+  , "  show = genericShow"
+  ]
+  where
+    replacements = fromFoldable [ "name" /\ name ]
+
+gen_decode :: String -> String
+gen_decode name = mustache replacements $ joinWith "\n" $
+  [ "instance decode{{name}} :: Decode {{name}} where"
+  , "  decode = genericDecode opts"
+  ]
+  where
+    replacements = fromFoldable [ "name" /\ name ]
+
+gen_deriveGeneric :: String -> String
+gen_deriveGeneric name = mustache replacements
+  "derive instance generic{{name}} :: Generic {{name}} _"
+  where
+    replacements = fromFoldable [ "name" /\ name ]
+
+gen_newtype :: String -> String
+gen_newtype name = mustache replacements
+  "derive instance newtype{{name}} :: Newtype {{name}} _"
+  where
+    replacements = fromFoldable [ "name" /\ name ]
+
+
+
+
 --------------------------------------------------------------------------------
 -- Util
 --------------------------------------------------------------------------------
@@ -102,24 +132,38 @@ joinWith' :: String -> Array String -> String
 joinWith' x xs =
   if null xs then mempty else joinWith x xs <> " "
 
---------------------------------------------------------------------------------
--- Main
---------------------------------------------------------------------------------
-
 nl :: Int -> String
 nl n = replicate n "\n" # joinWith mempty
 
 wrap :: forall a. Semigroup a => a -> a -> a
 wrap x y = x <> y <> x
 
+--------------------------------------------------------------------------------
+-- Main
+--------------------------------------------------------------------------------
+
 main :: forall eff.
   Eff ( process :: PROCESS, exception :: EXCEPTION, fs :: FS, console :: CONSOLE | eff )
       Unit
-main =
-  [ "Vec" /\ (range 1 9 # map gen_Vec # joinWith (nl 1) # wrap (nl 2))
-  , "vec" /\ (range 1 9 # map gen_vec # joinWith (nl 2) # wrap (nl 2))
-  , "uncurry" /\ (range 1 9 # map gen_uncurry # joinWith (nl 2) # wrap (nl 2))
-  , "curry" /\ (range 1 9 # map gen_curry # joinWith (nl 2) # wrap (nl 2))
+main = replaceGens
+  [ { path : "Data/Vec/Extra.purs"
+    , replacements : fromFoldable
+        [ "Vec"     /\ (range 1 9 # map gen_Vec # format 1)
+        , "vec"     /\ (range 1 9 # map gen_vec # format 2)
+        , "uncurry" /\ (range 1 9 # map gen_uncurry # format 2)
+        , "curry"   /\ (range 1 9 # map gen_curry # format 2)
+        ]
+    }
+  , { path : "WFObjFormat.purs"
+    , replacements : fromFoldable
+        let xs = [ "Main", "Model", "Vertex", "Face", "VertexRef" ] in
+        [ "deriveGeneric" /\ (map gen_deriveGeneric xs # format 2)
+        , "newtype" /\ (map gen_newtype xs # format 2)
+        , "show" /\ (map gen_show xs # format 2)
+        , "decode" /\ (map gen_decode xs # format 2)
+        ]
+    }
   ]
-  # fromFoldable
-  # replaceGens
+
+  where
+    format n = joinWith (nl n) >>> wrap (nl 2)

@@ -38,7 +38,8 @@
     "purescript-numbers": "^5.0.0",
     "purescript-prelude": "^3.3.0",
     "purescript-sized-vectors": "^2.2.0",
-    "purescript-pairs": "^5.0.0"
+    "purescript-pairs": "^5.0.0",
+    "purescript-foreign-generic": "^6.0.0"
   },
   "resolutions": {
     "purescript-extensions": "^2.2.0",
