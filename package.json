@@ -1,9 +1,14 @@
 {
   "private": false,
   "devDependencies": {
-    "adhoc": "^0.2.0"
+    "adhoc": "^0.2.0",
+    "window-mock": "0.0.13"
   },
   "scripts": {
+    "gen-obj-data": "blender -b -P tools/export.py -- --input-dir blend --output-dir public/data",
+    "clean": "rm -rf bower_components; rm -rf output",
+    "install": "bower install",
+    "build": "pulp browserify --to public/main.js",
     "start": "pulp --watch browserify --to public/main.js & adhoc -p 8000 public",
     "gen-src": "cd src-gen && pulp build && pulp run -- $PWD/../src"
   },
